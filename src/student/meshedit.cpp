@@ -5,6 +5,17 @@
 
 #include "../geometry/halfedge.h"
 #include "debug.h"
+#include <iostream>
+
+namespace {
+Halfedge_Mesh::HalfedgeRef find_previous_halfedge(const Halfedge_Mesh::HalfedgeRef hf) {
+    auto prev = hf->next();
+    while (prev->next() != hf) {
+        prev = prev->next();
+    }
+    return prev;
+}
+}
 
 /* Note on local operation return types:
 
@@ -50,14 +61,115 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_edge(Halfedge_Mesh::E
     return std::nullopt;
 }
 
+void Halfedge_Mesh::erase_halfedge_face(Halfedge_Mesh::HalfedgeRef hf) {
+    auto hf_next = hf->next();
+    auto hf_prev = hf_next->next();
+    // We will delete hf_next, hf_prev, this face,
+    // and hf_next's edge. hf_prev's edge will stay.
+
+    // hf_prev's edge stays, but hf_prev doesn't, so make sure
+    // edge points to hf_prev's twin.
+    hf_prev->edge()->halfedge() = hf_prev->twin();
+
+    // hf_next's and hf_prev's twins stay. Connect them,
+    // and make them point to hf_prev's edge.
+    hf_next->twin()->twin() = hf_prev->twin();
+    hf_prev->twin()->twin() = hf_next->twin();
+    hf_next->twin()->edge() = hf_prev->edge();
+
+    // Face is safe to be erased. It's only pointed to by
+    // hf, hf_next and hf_prev, who will all get deleted.
+    erase(hf->face());
+
+    // Edge is safe to be erased. It's only pointd to by hf_next,
+    // which will get deleted.
+    erase(hf_next->edge());
+
+    // hf_prev's vertex doen't get deleted. Make sure it doesn't point to hf_prev.
+    hf_prev->vertex()->halfedge() = hf_next->twin();
+
+    // hf_next's vertex will get deleted.
+    // hf_next's twin doesn't point to it anymore.
+    // hf_next's previous halfedge will get delete (hf).
+    // hf_next's edge already erased.
+    // hf_next's face already erased.
+    erase(hf_next);
+
+    // hf_prev's vertex already reassigned.
+    // hf_prev's face already erased.
+    // hf_prev's twin already reassigned.
+    // hf_prev's edge already erased.
+    // hf_prev's previous halfedge will get erased (hf_next).
+    erase(hf_prev);
+
+    erase(hf);
+}
+
 /*
     This method should collapse the given edge and return an iterator to
     the new vertex created by the collapse.
 */
 std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Mesh::EdgeRef e) {
+    if (e->on_boundary()) {
+        return std::nullopt;
+    }
+    auto hf = e->halfedge();
+    auto hf_twin = hf->twin();
+    auto v0 = hf->vertex();
+    auto v1 = hf->twin()->vertex();
 
-    (void)e;
-    return std::nullopt;
+    // Grab all half-edges from v0 or v1.
+    std::set<HalfedgeRef> halfedges;
+    auto hf_iter = v0->halfedge()->twin();
+    do {
+        if (hf_iter->vertex() != v1) {
+            halfedges.insert(hf_iter->twin());
+        }
+        hf_iter = hf_iter->next()->twin();
+    } while (hf_iter != v0->halfedge()->twin());
+
+    hf_iter = v1->halfedge()->twin();
+    do {
+        if (hf_iter->vertex() != v0) {
+            halfedges.insert(hf_iter->twin());
+        }
+        hf_iter = hf_iter->next()->twin();
+    } while (hf_iter != v1->halfedge()->twin());
+
+    // Check if any of faces will collapse as well
+    if (hf->face()->degree() == 3) {
+        halfedges.erase(hf->next());
+        erase_halfedge_face(hf);
+    } else {
+        auto hf_prev = find_previous_halfedge(hf);
+        hf_prev->next() = hf->next();
+        hf->face()->halfedge() = hf_prev;
+        erase(hf);
+    }
+
+    if (hf_twin->face()->degree() == 3) {
+        halfedges.erase(hf_twin->next()->next());
+        erase_halfedge_face(hf_twin);
+    } else {
+        auto hf_twin_prev = find_previous_halfedge(hf_twin);
+        hf_twin_prev->next() = hf_twin->next();
+        hf_twin->face()->halfedge() = hf_twin_prev;
+        erase(hf_twin);
+    }
+
+    // Create new vertex, and hook gathered halfedges to it.
+    VertexRef vertex = new_vertex();
+    vertex->pos = e->center();
+    for (auto halfedge : halfedges) {
+        halfedge->vertex() = vertex;
+        vertex->halfedge() = halfedge;
+    }
+
+    erase(v0);
+    erase(v1);
+    erase(e);
+
+    return vertex;
 }
 
 /*
@@ -75,9 +187,50 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_face(Halfedge_Me
     flipped edge.
 */
 std::optional<Halfedge_Mesh::EdgeRef> Halfedge_Mesh::flip_edge(Halfedge_Mesh::EdgeRef e) {
+    auto hf = e->halfedge();
+    auto hf_twin = hf->twin();
 
-    (void)e;
-    return std::nullopt;
+    if (hf->is_boundary() || hf_twin->is_boundary()) { 
+        return std::nullopt;
+    }
+
+    auto v0 = hf->vertex();
+    auto v1 = hf_twin->vertex();
+    auto w0 = hf_twin->next()->twin()->vertex();
+    auto w1 = hf->next()->twin()->vertex();
+
+    // Current edge spans vertexes v0 and v1.
+    // We want to flip it so it connects to w0 and w1.
+
+    auto new_v0_halfedge = hf_twin->next();
+    auto new_v1_halfedge = hf->next();
+
+    auto hf_prev = find_previous_halfedge(hf);
+    auto twin_prev = find_previous_halfedge(hf_twin);
+    hf_prev->next() = hf_twin->next();
+    twin_prev->next() = hf->next();
+
+    auto new_hf_next = hf->next()->next();
+    auto new_hf_prev = hf_twin->next();
+
+    auto new_twin_next = hf_twin->next()->next();
+    auto new_twin_prev = hf->next();
+
+    // Only set new values after we have figured out all the data, so we don't accidentally overwrite.
+    hf->vertex() = w0;
+    hf->next() = new_hf_next;
+    new_hf_prev->next() = hf;
+    hf_twin->vertex() = w1;
+    new_hf_prev->face() = hf->face();
+    new_twin_prev->face() = hf_twin->face();
+    hf_twin->next() = new_twin_next;
+    new_twin_prev->next() = hf_twin;
+    v0->halfedge() = new_v0_halfedge;
+    v1->halfedge() = new_v1_halfedge;
+    hf->face()->halfedge() = hf;
+    hf_twin->face()->halfedge() = hf_twin;
+
+    return e;
 }
 
 /*

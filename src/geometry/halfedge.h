@@ -212,7 +212,8 @@ public:
         Collapse an edge, returning a pointer to the collapsed vertex
     */
     std::optional<VertexRef> collapse_edge(EdgeRef e);
-
+    void erase_halfedge_face(HalfedgeRef hf);
+    
     /*
         Collapse a face, returning a pointer to the collapsed vertex
     */

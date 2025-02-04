@@ -239,9 +239,98 @@ std::optional<Halfedge_Mesh::EdgeRef> Halfedge_Mesh::flip_edge(Halfedge_Mesh::Ed
     the edge that was split, rather than the new edges.
 */
 std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::split_edge(Halfedge_Mesh::EdgeRef e) {
+    // Don't handle boundaries. For now.
+    // We should still be able to split on boundary, just create mark the right side as boundary still.
+    if (e->on_boundary())
+        return std::nullopt;
 
-    (void)e;
-    return std::nullopt;
+    // This operation should only work on triangle meshes.
+    if (e->halfedge()->face()->degree() != 3 || e->halfedge()->twin()->face()->degree() != 3)
+        return std::nullopt;
+
+    auto hf = e->halfedge();
+    auto hf_next = hf->next();
+    auto hf_prev = hf_next->next();
+
+    auto hf_twin = hf->twin();
+    auto hf_twin_next = hf_twin->next();
+    auto hf_twin_prev = hf_twin_next->next();
+
+    auto v0 = hf->vertex();
+    auto v1 = hf_twin->vertex();
+
+    // We will create new vertex, four new edges, four new faces, and connect them as appropriate.
+    // Then we will delete the old edge e, its halfedges, and its faces.
+    VertexRef vertex = new_vertex();
+    vertex->pos = e->center();
+
+    // We will assume frame where v0 is at the bottom of the screen, and v1 at the top.
+    // This way we can refer to the new edges as north/south/west/east to describe them easier.
+    // hf is on the "west" side of edge, pointing north. hf_twin is opposite.
+    EdgeRef edge_north = new_edge();
+    EdgeRef edge_south = new_edge();
+    EdgeRef edge_west = new_edge();
+    EdgeRef edge_east = new_edge();
+    HalfedgeRef hf_n = new_halfedge();
+    HalfedgeRef hf_n_twin = new_halfedge();
+    HalfedgeRef hf_s = new_halfedge();
+    HalfedgeRef hf_s_twin = new_halfedge();
+    HalfedgeRef hf_w = new_halfedge();
+    HalfedgeRef hf_w_twin = new_halfedge();
+    HalfedgeRef hf_e = new_halfedge();
+    HalfedgeRef hf_e_twin = new_halfedge();
+    FaceRef face_nw = new_face();
+    FaceRef face_ne = new_face();
+    FaceRef face_sw = new_face();
+    FaceRef face_se = new_face();
+
+    hf_n->set_neighbors(hf->next(), hf_n_twin, vertex, edge_north, face_nw);
+    hf_n_twin->set_neighbors(hf_e, hf_n, v1, edge_north, face_ne);
+    hf_s->set_neighbors(hf_twin_next, hf_s_twin, vertex, edge_south, face_se);
+    hf_s_twin->set_neighbors(hf_w, hf_s, v0, edge_south, face_sw);
+    hf_w->set_neighbors(hf_prev, hf_w_twin, vertex, edge_west, face_sw);
+    hf_w_twin->set_neighbors(hf_n, hf_w, hf_prev->vertex(), edge_west, face_nw);
+    hf_e->set_neighbors(hf_twin_prev, hf_e_twin, vertex, edge_east, face_ne);
+    hf_e_twin->set_neighbors(hf_s, hf_e, hf_twin_prev->vertex(), edge_east, face_se);
+
+    vertex->halfedge() = hf_n;
+    edge_east->halfedge() = hf_e;
+    edge_north->halfedge() = hf_n;
+    edge_west->halfedge() = hf_w;
+    edge_south->halfedge() = hf_s;
+    face_nw->halfedge() = hf_n;
+    face_ne->halfedge() = hf_e;
+    face_se->halfedge() = hf_s;
+    face_sw->halfedge() = hf_w;
+
+    hf_next->next() = hf_w_twin;
+    hf_prev->next() = hf_s_twin;
+    hf_twin_next->next() = hf_e_twin;
+    hf_twin_prev->next() = hf_n_twin;
+
+    hf_next->face() = face_nw;
+    hf_prev->face() = face_sw;
+    hf_twin_next->face() = face_se;
+    hf_twin_prev->face() = face_ne;
+
+    v0->halfedge() = hf_twin_next;
+    v1->halfedge() = hf_next;
+
+    face_nw->halfedge() = hf_next;
+    face_sw->halfedge() = hf_prev;
+    face_ne->halfedge() = hf_twin_prev;
+    face_se->halfedge() = hf_twin_next;
+
+    // Face's halfedge does not point to that face???
+    
+    // We are ready to delete old elements now.
+    erase(hf->face());
+    erase(hf_twin->face());
+    erase(e);
+    erase(hf);
+    erase(hf_twin);
+
+    return vertex;
 }
 
 /* Note on the beveling process:

@@ -46,9 +46,57 @@ Halfedge_Mesh::HalfedgeRef find_previous_halfedge(const Halfedge_Mesh::HalfedgeR
     edges and faces with a single face, returning the new face.
  */
 std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_vertex(Halfedge_Mesh::VertexRef v) {
+    if (v->on_boundary())
+        return std::nullopt;
 
-    (void)v;
-    return std::nullopt;
+    std::vector<HalfedgeRef> outgoing_halfedges;
+
+    auto hf = v->halfedge();
+    do {
+        outgoing_halfedges.push_back(hf);
+        hf = hf->twin()->next();
+    } while (hf != v->halfedge());
+
+    auto face = new_face();
+    face->halfedge() = outgoing_halfedges.front()->next();
+    
+    std::set<FaceRef> faces_to_delete;
+
+    // Make sure "outside" halfedges point to the new face, and that
+    // outside vertexes point to valid halfedges that will stay.
+    for (size_t i = 0; i < outgoing_halfedges.size(); ++i) {
+        faces_to_delete.insert(outgoing_halfedges[i]->face());
+
+        auto outside_hf = outgoing_halfedges[i]->next();
+        auto outside_vertex = outgoing_halfedges[i]->twin()->vertex();
+        outside_vertex->halfedge() = outside_hf;
+
+        do {
+            outside_hf->face() = face;
+            outside_hf = outside_hf->next();
+        } while (outside_hf != outgoing_halfedges[i]->next());
+    }
+
+    // Connect outside halfedges, so we can delete inside ones.
+    for (size_t i = 0; i < outgoing_halfedges.size(); ++i) {
+        auto outside_hf = outgoing_halfedges[i]->next();
+        auto prev = find_previous_halfedge(outgoing_halfedges[i]->twin());
+        prev->next() = outside_hf;
+    }
+
+    for (auto halfedge : outgoing_halfedges) {
+        erase(halfedge->edge());
+        erase(halfedge->twin());
+        erase(halfedge);
+    }
+
+    for (auto face : faces_to_delete) {
+        erase(face);
+    }
+
+    erase(v);
+
+    return face;
 }
 
 /*

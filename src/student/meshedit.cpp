@@ -442,12 +442,99 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::bevel_edge(Halfedge_Mesh::E
     implement!)
 */
 std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::bevel_face(Halfedge_Mesh::FaceRef f) {
-
     // Reminder: You should set the positions of new vertices (v->pos) to be exactly
     // the same as wherever they "started from."
+    std::vector<VertexRef> vertexes;
+    std::vector<HalfedgeRef> halfedges;
+    auto hf = f->halfedge();
+    do {
+        vertexes.push_back(hf->vertex());
+        halfedges.push_back(hf);
+        hf = hf->next();
+    } while (hf != f->halfedge());
 
-    (void)f;
-    return std::nullopt;
+    std::vector<VertexRef> new_vertexes;
+    std::vector<EdgeRef> new_edges;
+    std::vector<FaceRef> new_faces;
+    std::vector<HalfedgeRef> new_halfedges;
+    for (auto v : vertexes) {
+        new_vertexes.push_back(new_vertex());
+        new_vertexes.back()->pos = v->pos;
+        new_edges.push_back(new_edge());
+        new_edges.push_back(new_edge());
+        new_halfedges.push_back(new_halfedge());
+        new_halfedges.push_back(new_halfedge());
+        new_halfedges.push_back(new_halfedge());
+        new_halfedges.push_back(new_halfedge());
+        new_faces.push_back(new_face());
+    }
+
+    for (size_t i = 0; i < vertexes.size(); ++i) {
+        //       <-- top_hf
+        // v[i+1] __________v[i]
+        // |    hf1 -->     |
+        // |                |
+        // | hf4        hf2 | edge_side
+        // |                |
+        // |    hf3         |
+        // |_____edge_bot___| n_v[i]
+        // n_v[i+1] top_hf_twin
+
+        int prev_idx = i - 1;
+        if (prev_idx < 0) {
+            prev_idx = vertexes.size() - 1;
+        }
+
+        int next_idx = i + 1;
+        if (i+1 >= vertexes.size()) {
+            next_idx = 0;
+        }
+
+        auto face = new_faces[i];
+        auto hf1 = new_halfedges[4*i + 0];
+        auto hf2 = new_halfedges[4*i + 1];
+        auto hf3 = new_halfedges[4*i + 2];
+        auto hf4 = new_halfedges[4*i + 3];
+
+        auto hf4_twin = new_halfedges[4*next_idx +1];
+        auto hf2_twin = new_halfedges[4*prev_idx + 3];
+
+        auto edge_side = new_edges[2*i + 0];
+        auto edge_bot = new_edges[2*i + 1];
+        auto edge_side_next = new_edges[2*next_idx + 0];
+
+        auto top_hf = halfedges[i];
+        auto top_hf_twin = top_hf->twin();
+
+        face->halfedge() = hf1;
+
+        hf1->set_neighbors(hf2, top_hf, vertexes[next_idx], top_hf->edge(), face);
+        hf2->set_neighbors(hf3, hf2_twin, vertexes[i], edge_side, face);
+        hf3->set_neighbors(hf4, top_hf_twin, new_vertexes[i], edge_bot, face);
+        hf4->set_neighbors(hf1, hf4_twin, new_vertexes[next_idx], edge_side_next, face);
+
+        top_hf->set_neighbors(top_hf->next(), hf1, vertexes[i], top_hf->edge(), f);
+        top_hf_twin->set_neighbors(top_hf_twin->next(), hf3, new_vertexes[next_idx], edge_bot, top_hf_twin->face());
+        
+        top_hf->edge()->halfedge() = top_hf;
+
+        edge_bot->halfedge() = hf3;
+        edge_side->halfedge() = hf2;
+        vertexes[i]->halfedge() = top_hf;
+        new_vertexes[i]->halfedge() = hf3;
+    
+    }
+
+    // Make sure all halfedges of new_vertexes point back to them.
+    for (auto vertex : new_vertexes) {
+        auto new_vert_hf = vertex->halfedge();
+        do {
+            new_vert_hf->vertex() = vertex;
+            new_vert_hf = new_vert_hf->twin()->next();
+        } while (new_vert_hf != vertex->halfedge());
+    }
+
+    return f;
 }
 
 /*
@@ -545,11 +632,15 @@ void Halfedge_Mesh::bevel_face_positions(const std::vector<Vec3>& start_position
         h = h->next();
     } while(h != face->halfedge());
 
-    (void)new_halfedges;
-    (void)start_positions;
-    (void)face;
-    (void)tangent_offset;
-    (void)normal_offset;
+    auto face_normal = face->normal();
+    auto face_centerpoint = face->center();
+
+    for (auto hf : new_halfedges) {
+        auto vertex = hf->vertex();
+        auto direction_from_center = vertex->pos - face_centerpoint;
+        direction_from_center.normalize();
+        vertex->pos += face_normal * normal_offset + direction_from_center * tangent_offset;
+    }
 }
 
 /*

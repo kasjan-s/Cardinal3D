@@ -813,6 +813,54 @@ void Halfedge_Mesh::bevel_face_positions(const std::vector<Vec3>& start_position
 void Halfedge_Mesh::triangulate() {
 
     // For each face...
+    // Store faces in a separate container to avoid issues with modifying faces in place while iterating
+    std::vector<FaceRef> original_faces;
+    for (FaceRef fc = faces_begin(); fc != faces_end(); ++fc) {
+        if (fc->degree() > 3 && !fc->is_boundary()) {
+            original_faces.push_back(fc);
+        }
+    }
+
+    // Process each face for triangulation
+    for (FaceRef fc : original_faces) {
+        HalfedgeRef h_0 = fc->halfedge();
+        VertexRef v_0 = h_0->vertex();
+
+        HalfedgeRef h_p1 = h_0->next();
+        HalfedgeRef h_p2 = h_p1->next();
+
+        while (fc->degree() > 3) {
+            VertexRef p2 = h_p2->vertex();
+
+            // Create new edge, halfedges, and face
+            EdgeRef new_edge_ = new_edge();
+            FaceRef new_face_ = new_face();
+            HalfedgeRef new_h = new_halfedge();
+            HalfedgeRef new_h_twin = new_halfedge();
+
+            // Connect new halfedges and edges
+            new_h->set_neighbors(h_p2, new_h_twin, v_0, new_edge_, fc);
+            new_h_twin->set_neighbors(h_0, new_h, p2, new_edge_, new_face_);
+
+            // Update remaining old halfedges
+            h_0->face() = new_face_;
+            h_p1->face() = new_face_;
+
+            find_previous_halfedge(h_0)->next() = new_h;
+            h_p1->next() = new_h_twin;
+
+            // Update face and edge relationships
+            new_face_->halfedge() = new_h_twin;
+            new_edge_->halfedge() = new_h;
+            fc->halfedge() = new_h;
+
+            // Update next pointers for iteration
+            h_0 = new_h;
+            h_p1 = h_0->next();
+            h_p2 = h_p1->next();
+        }
+    }
+
 }
 
 /* Note on the quad subdivision process:

@@ -455,12 +455,60 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::split_edge(Halfedge_Mesh:
     implement!)
 */
 std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::bevel_vertex(Halfedge_Mesh::VertexRef v) {
+    if (v->on_boundary() || v->degree() < 3) {
+        return std::nullopt;
+    }
 
-    // Reminder: You should set the positions of new vertices (v->pos) to be exactly
-    // the same as wherever they "started from."
+    std::vector<HalfedgeRef> outgoing_halfedges;
+    auto hf = v->halfedge();
+    do {
+        outgoing_halfedges.push_back(hf);
+        hf = hf->twin()->next();
+    } while (hf != v->halfedge());
 
-    (void)v;
-    return std::nullopt;
+    auto degree = outgoing_halfedges.size();
+
+    std::vector<VertexRef> new_vertexes;
+    std::vector<EdgeRef> new_edges;
+    std::vector<HalfedgeRef> new_halfedges;
+    auto face = new_face();
+    for (size_t i = 0; i < degree; ++i) {
+        new_vertexes.push_back(new_vertex());
+        new_vertexes.back()->pos = v->pos;
+        new_edges.push_back(new_edge());
+        new_halfedges.push_back(new_halfedge());
+        new_halfedges.push_back(new_halfedge());
+    }
+
+    for (size_t i = 0; i < degree; ++i) {
+        size_t next_idx = i + 1;
+        if (next_idx >= degree) {
+            next_idx = degree - 1;
+        }
+        size_t prev_idx = i == 0 ? degree - 1 : i - 1;
+
+        auto old_hf = outgoing_halfedges[i];
+        auto old_hf_prev = find_previous_halfedge(old_hf);
+
+        auto hf = new_halfedges[2 * i];
+
+        hf->set_neighbors(old_hf, new_halfedges[2 * i + 1], new_vertexes[prev_idx], new_edges[i], old_hf->face());
+
+        hf->twin()->set_neighbors(new_halfedges[2 * prev_idx + 1], hf, new_vertexes[i], new_edges[i], face);
+
+        new_edges[i]->halfedge() = hf;
+
+        old_hf_prev->next() = hf;
+
+        old_hf->vertex() = new_vertexes[i];
+        new_vertexes[i]->halfedge() = hf->twin();
+
+        face->halfedge() = hf->twin();
+    }
+
+    erase(v);
+
+    return face;
 }
 
 /*
@@ -605,10 +653,35 @@ void Halfedge_Mesh::bevel_vertex_positions(const std::vector<Vec3>& start_positi
         h = h->next();
     } while(h != face->halfedge());
 
-    (void)new_halfedges;
-    (void)start_positions;
-    (void)face;
-    (void)tangent_offset;
+
+    for (size_t i = 0; i < new_halfedges.size(); ++i) {
+        auto hf = new_halfedges[i];
+        auto vertex = hf->vertex();
+        auto outside_vertex = hf->twin()->next()->twin()->vertex();
+
+        auto direction = start_positions[i] - outside_vertex->pos;
+        direction = direction.unit();
+        vertex->pos += direction * tangent_offset;
+
+        auto distance_from_start = (start_positions[i] - vertex->pos).norm();
+        auto distance_from_end = (outside_vertex->pos - vertex->pos).norm();
+        auto original_distance = (start_positions[i] - outside_vertex->pos).norm();
+
+        // Clamp possible positions to stay between original vertexes.
+        if (distance_from_start > original_distance) {
+            if (distance_from_end > distance_from_start) {
+                vertex->pos = start_positions[i];
+            } else {
+                vertex->pos = outside_vertex->pos;
+            }
+        } else if (distance_from_end > original_distance) {
+            if (distance_from_end < distance_from_start) {
+                vertex->pos = outside_vertex->pos;
+            } else {
+                vertex->pos = start_positions[i];
+            }
+        }
+    }
 }
 
 /*

@@ -15,6 +15,30 @@ Halfedge_Mesh::HalfedgeRef find_previous_halfedge(const Halfedge_Mesh::HalfedgeR
     }
     return prev;
 }
+
+bool is_face_safe_to_collapse(const Halfedge_Mesh::FaceRef face, const Halfedge_Mesh::EdgeRef edge) {
+    if (face->degree() > 3)
+        return true;
+
+    int boundary_edges = 0;
+    auto hf = face->halfedge();
+    do {
+        boundary_edges += hf->edge()->on_boundary() ? 1 : 0;
+        hf = hf->next();
+    } while (hf != face->halfedge());
+
+    // Mesh is a singular triangle that would become 2-edge line.
+    if (boundary_edges == 3) 
+        return false;
+
+    // This will also lead to a 2-edge line, with a hanging boundary vertex.
+    // However if edge IS on the boundary, then collapsing is safe to do, we'll 
+    // just end up with a new boundary edge.
+    if (boundary_edges == 2 && !edge->on_boundary()) 
+        return false;
+
+    return true;
+}
 }
 
 /* Note on local operation return types:
@@ -46,9 +70,6 @@ Halfedge_Mesh::HalfedgeRef find_previous_halfedge(const Halfedge_Mesh::HalfedgeR
     edges and faces with a single face, returning the new face.
  */
 std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_vertex(Halfedge_Mesh::VertexRef v) {
-    if (v->on_boundary())
-        return std::nullopt;
-
     std::vector<HalfedgeRef> outgoing_halfedges;
 
     auto hf = v->halfedge();
@@ -62,13 +83,19 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_vertex(Halfedge_Mesh:
     
     std::set<FaceRef> faces_to_delete;
 
-    // Make sure "outside" halfedges point to the new face, and that
-    // outside vertexes point to valid halfedges that will stay.
+    // Make sure "outside" halfedges (i.e. halfedges not adjacent to v)
+    // point to the new face, and that outside vertexes point to valid halfedges that will stay.
     for (size_t i = 0; i < outgoing_halfedges.size(); ++i) {
         faces_to_delete.insert(outgoing_halfedges[i]->face());
 
         auto outside_hf = outgoing_halfedges[i]->next();
         auto outside_vertex = outgoing_halfedges[i]->twin()->vertex();
+
+        // After erasing this vertex a neighbor would end up with a single degree, which 
+        // is incorrect manifold mesh geometry.
+        if (outside_vertex->degree() == 2 && !outside_vertex->on_boundary()) {
+            return std::nullopt;
+        }
         outside_vertex->halfedge() = outside_hf;
 
         do {
@@ -158,13 +185,17 @@ void Halfedge_Mesh::erase_halfedge_face(Halfedge_Mesh::HalfedgeRef hf) {
     the new vertex created by the collapse.
 */
 std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Mesh::EdgeRef e) {
-    if (e->on_boundary()) {
-        return std::nullopt;
-    }
     auto hf = e->halfedge();
     auto hf_twin = hf->twin();
     auto v0 = hf->vertex();
     auto v1 = hf->twin()->vertex();
+
+    auto face = hf->face();
+    auto face_twin = hf_twin->face();
+
+    if (!is_face_safe_to_collapse(face, e) || !is_face_safe_to_collapse(face_twin, e)) {
+        return std::nullopt;
+    }
 
     // Grab all half-edges from v0 or v1.
     std::set<HalfedgeRef> halfedges;
@@ -185,17 +216,18 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
     } while (hf_iter != v1->halfedge()->twin());
 
     // Check if any of faces will collapse as well
-    if (hf->face()->degree() == 3) {
+    if (face->degree() == 3) {
         halfedges.erase(hf->next());
         erase_halfedge_face(hf);
     } else {
+        // If it won't, we just need to connect prev and next halfedges.
         auto hf_prev = find_previous_halfedge(hf);
         hf_prev->next() = hf->next();
         hf->face()->halfedge() = hf_prev;
         erase(hf);
     }
 
-    if (hf_twin->face()->degree() == 3) {
+    if (face_twin->degree() == 3) {
         halfedges.erase(hf_twin->next()->next());
         erase_halfedge_face(hf_twin);
     } else {

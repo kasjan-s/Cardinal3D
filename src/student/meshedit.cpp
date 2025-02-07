@@ -270,7 +270,7 @@ std::optional<Halfedge_Mesh::EdgeRef> Halfedge_Mesh::flip_edge(Halfedge_Mesh::Ed
     auto hf = e->halfedge();
     auto hf_twin = hf->twin();
 
-    if (hf->is_boundary() || hf_twin->is_boundary()) { 
+    if (e->on_boundary()) { 
         return std::nullopt;
     }
 
@@ -281,6 +281,16 @@ std::optional<Halfedge_Mesh::EdgeRef> Halfedge_Mesh::flip_edge(Halfedge_Mesh::Ed
 
     // Current edge spans vertexes v0 and v1.
     // We want to flip it so it connects to w0 and w1.
+
+    // First, check that w0 and w1 aren't already connect by some other edge.
+    // If it is, we'll end up with degenerate case where two edges overlap.
+    auto existing_hf = w0->halfedge();
+    do {
+        if (existing_hf->twin()->vertex() == w1) 
+            return std::nullopt;
+
+        existing_hf = existing_hf->twin()->next();
+    } while (existing_hf != w0->halfedge());
 
     auto new_v0_halfedge = hf_twin->next();
     auto new_v1_halfedge = hf->next();

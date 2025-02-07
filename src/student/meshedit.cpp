@@ -760,6 +760,38 @@ void Halfedge_Mesh::linear_subdivide_positions() {
     // For each vertex, assign Vertex::new_pos to
     // its original position, Vertex::pos.
 
+    for (VertexRef v = vertices_begin(); v != vertices_end(); v++){
+        v->new_pos = v->pos;
+    }
+
+    for (EdgeRef e = edges_begin(); e != edges_end(); e++) {
+        Vec3 v1 = e->halfedge()->vertex()->pos;
+        Vec3 v2 = e->halfedge()->twin()->vertex()->pos;
+        e->new_pos = (v1 + v2) / 2;
+    }
+
+    for (FaceRef f = faces_begin(); f != faces_end(); f++) {
+        // forget about boundary
+        if (f->is_boundary() == true || f->degree() == 0) {
+            continue;
+        }
+
+        Vec3 v_face = Vec3(0, 0, 0);
+        HalfedgeRef h = f->halfedge();
+
+        do {
+            v_face += h->vertex()->pos;
+            h = h->next();
+        } while(h != f->halfedge());
+
+        v_face /= f->degree();
+
+        f->new_pos = v_face;
+    }
+
+    // For each vertex, assign Vertex::new_pos to
+    // its original position, Vertex::pos.
+
     // For each edge, assign the midpoint of the two original
     // positions to Edge::new_pos.
 
@@ -787,10 +819,60 @@ void Halfedge_Mesh::catmullclark_subdivide_positions() {
     // rules. (These rules are outlined in the Developer Manual.)
 
     // Faces
+    for (FaceRef f = faces_begin(); f != faces_end(); f++) {
+        // forget about boundary
+        if (f->is_boundary() == true || f->degree() == 0) {
+            continue;
+        }
+
+        Vec3 v_face = Vec3(0, 0, 0);
+        HalfedgeRef h = f->halfedge();
+
+        do {
+            v_face += h->vertex()->pos;
+            h = h->next();
+        } while(h != f->halfedge());
+
+        v_face /= f->degree();
+
+        f->new_pos = v_face;
+    }
 
     // Edges
+    for (EdgeRef e = edges_begin(); e != edges_end(); e++) {
+        Vec3 v1 = e->halfedge()->vertex()->pos;
+        Vec3 v_f1 = e->halfedge()->face()->new_pos;
+        Vec3 v2 = e->halfedge()->twin()->vertex()->pos;
+        Vec3 v_f2 = e->halfedge()->twin()->face()->new_pos;
+        e->new_pos = (v1 + v2 + v_f1 + v_f2) / 4;
+    }
 
-    // Vertices
+
+    // Vertex positions
+    for (VertexRef v = vertices_begin(); v != vertices_end(); v++) {
+        int n = v->degree();
+        if (n == 0) continue;
+
+        // Compute Q (face centroid average)
+        Vec3 Q(0, 0, 0);
+        Vec3 R(0, 0, 0);  // Edge midpoint average
+        HalfedgeRef h = v->halfedge();
+
+        HalfedgeRef start = h;
+        do {
+            if (!h->face()->is_boundary()) {
+                Q += h->face()->new_pos;
+            }
+            R += h->edge()->new_pos;
+            h = h->twin()->next();
+        } while (h != start);
+
+        Q /= n;
+        R /= n;
+
+        Vec3 S = v->pos;
+        v->new_pos = (Q + 2 * R + (n - 3) * S) / n;
+    }
 }
 
 /*

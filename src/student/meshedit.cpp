@@ -94,6 +94,7 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_vertex(Halfedge_Mesh:
         // After erasing this vertex a neighbor would end up with a single degree, which 
         // is incorrect manifold mesh geometry.
         if (outside_vertex->degree() == 2 && !outside_vertex->on_boundary()) {
+            erase(face);
             return std::nullopt;
         }
         outside_vertex->halfedge() = outside_hf;
@@ -283,7 +284,7 @@ std::optional<Halfedge_Mesh::EdgeRef> Halfedge_Mesh::flip_edge(Halfedge_Mesh::Ed
     // We want to flip it so it connects to w0 and w1.
 
     // First, check that w0 and w1 aren't already connect by some other edge.
-    // If it is, we'll end up with degenerate case where two edges overlap.
+    // If they are, we'd end up with degenerate case where two edges overlap.
     auto existing_hf = w0->halfedge();
     do {
         if (existing_hf->twin()->vertex() == w1) 

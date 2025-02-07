@@ -15,6 +15,30 @@ Halfedge_Mesh::HalfedgeRef find_previous_halfedge(const Halfedge_Mesh::HalfedgeR
     }
     return prev;
 }
+
+bool is_face_safe_to_collapse(const Halfedge_Mesh::FaceRef face, const Halfedge_Mesh::EdgeRef edge) {
+    if (face->degree() > 3)
+        return true;
+
+    int boundary_edges = 0;
+    auto hf = face->halfedge();
+    do {
+        boundary_edges += hf->edge()->on_boundary() ? 1 : 0;
+        hf = hf->next();
+    } while (hf != face->halfedge());
+
+    // Mesh is a singular triangle that would become 2-edge line.
+    if (boundary_edges == 3) 
+        return false;
+
+    // This will also lead to a 2-edge line, with a hanging boundary vertex.
+    // However if edge IS on the boundary, then collapsing is safe to do, we'll 
+    // just end up with a new boundary edge.
+    if (boundary_edges == 2 && !edge->on_boundary()) 
+        return false;
+
+    return true;
+}
 }
 
 /* Note on local operation return types:
@@ -46,9 +70,6 @@ Halfedge_Mesh::HalfedgeRef find_previous_halfedge(const Halfedge_Mesh::HalfedgeR
     edges and faces with a single face, returning the new face.
  */
 std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_vertex(Halfedge_Mesh::VertexRef v) {
-    if (v->on_boundary())
-        return std::nullopt;
-
     std::vector<HalfedgeRef> outgoing_halfedges;
 
     auto hf = v->halfedge();
@@ -62,13 +83,20 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_vertex(Halfedge_Mesh:
     
     std::set<FaceRef> faces_to_delete;
 
-    // Make sure "outside" halfedges point to the new face, and that
-    // outside vertexes point to valid halfedges that will stay.
+    // Make sure "outside" halfedges (i.e. halfedges not adjacent to v)
+    // point to the new face, and that outside vertexes point to valid halfedges that will stay.
     for (size_t i = 0; i < outgoing_halfedges.size(); ++i) {
         faces_to_delete.insert(outgoing_halfedges[i]->face());
 
         auto outside_hf = outgoing_halfedges[i]->next();
         auto outside_vertex = outgoing_halfedges[i]->twin()->vertex();
+
+        // After erasing this vertex a neighbor would end up with a single degree, which 
+        // is incorrect manifold mesh geometry.
+        if (outside_vertex->degree() == 2 && !outside_vertex->on_boundary()) {
+            erase(face);
+            return std::nullopt;
+        }
         outside_vertex->halfedge() = outside_hf;
 
         do {
@@ -158,13 +186,17 @@ void Halfedge_Mesh::erase_halfedge_face(Halfedge_Mesh::HalfedgeRef hf) {
     the new vertex created by the collapse.
 */
 std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Mesh::EdgeRef e) {
-    if (e->on_boundary()) {
-        return std::nullopt;
-    }
     auto hf = e->halfedge();
     auto hf_twin = hf->twin();
     auto v0 = hf->vertex();
     auto v1 = hf->twin()->vertex();
+
+    auto face = hf->face();
+    auto face_twin = hf_twin->face();
+
+    if (!is_face_safe_to_collapse(face, e) || !is_face_safe_to_collapse(face_twin, e)) {
+        return std::nullopt;
+    }
 
     // Grab all half-edges from v0 or v1.
     std::set<HalfedgeRef> halfedges;
@@ -185,17 +217,18 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
     } while (hf_iter != v1->halfedge()->twin());
 
     // Check if any of faces will collapse as well
-    if (hf->face()->degree() == 3) {
+    if (face->degree() == 3) {
         halfedges.erase(hf->next());
         erase_halfedge_face(hf);
     } else {
+        // If it won't, we just need to connect prev and next halfedges.
         auto hf_prev = find_previous_halfedge(hf);
         hf_prev->next() = hf->next();
         hf->face()->halfedge() = hf_prev;
         erase(hf);
     }
 
-    if (hf_twin->face()->degree() == 3) {
+    if (face_twin->degree() == 3) {
         halfedges.erase(hf_twin->next()->next());
         erase_halfedge_face(hf_twin);
     } else {
@@ -238,7 +271,7 @@ std::optional<Halfedge_Mesh::EdgeRef> Halfedge_Mesh::flip_edge(Halfedge_Mesh::Ed
     auto hf = e->halfedge();
     auto hf_twin = hf->twin();
 
-    if (hf->is_boundary() || hf_twin->is_boundary()) { 
+    if (e->on_boundary()) { 
         return std::nullopt;
     }
 
@@ -249,6 +282,16 @@ std::optional<Halfedge_Mesh::EdgeRef> Halfedge_Mesh::flip_edge(Halfedge_Mesh::Ed
 
     // Current edge spans vertexes v0 and v1.
     // We want to flip it so it connects to w0 and w1.
+
+    // First, check that w0 and w1 aren't already connect by some other edge.
+    // If they are, we'd end up with degenerate case where two edges overlap.
+    auto existing_hf = w0->halfedge();
+    do {
+        if (existing_hf->twin()->vertex() == w1) 
+            return std::nullopt;
+
+        existing_hf = existing_hf->twin()->next();
+    } while (existing_hf != w0->halfedge());
 
     auto new_v0_halfedge = hf_twin->next();
     auto new_v1_halfedge = hf->next();
@@ -455,12 +498,60 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::split_edge(Halfedge_Mesh:
     implement!)
 */
 std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::bevel_vertex(Halfedge_Mesh::VertexRef v) {
+    if (v->on_boundary() || v->degree() < 3) {
+        return std::nullopt;
+    }
 
-    // Reminder: You should set the positions of new vertices (v->pos) to be exactly
-    // the same as wherever they "started from."
+    std::vector<HalfedgeRef> outgoing_halfedges;
+    auto hf = v->halfedge();
+    do {
+        outgoing_halfedges.push_back(hf);
+        hf = hf->twin()->next();
+    } while (hf != v->halfedge());
 
-    (void)v;
-    return std::nullopt;
+    auto degree = outgoing_halfedges.size();
+
+    std::vector<VertexRef> new_vertexes;
+    std::vector<EdgeRef> new_edges;
+    std::vector<HalfedgeRef> new_halfedges;
+    auto face = new_face();
+    for (size_t i = 0; i < degree; ++i) {
+        new_vertexes.push_back(new_vertex());
+        new_vertexes.back()->pos = v->pos;
+        new_edges.push_back(new_edge());
+        new_halfedges.push_back(new_halfedge());
+        new_halfedges.push_back(new_halfedge());
+    }
+
+    for (size_t i = 0; i < degree; ++i) {
+        size_t next_idx = i + 1;
+        if (next_idx >= degree) {
+            next_idx = degree - 1;
+        }
+        size_t prev_idx = i == 0 ? degree - 1 : i - 1;
+
+        auto old_hf = outgoing_halfedges[i];
+        auto old_hf_prev = find_previous_halfedge(old_hf);
+
+        auto hf = new_halfedges[2 * i];
+
+        hf->set_neighbors(old_hf, new_halfedges[2 * i + 1], new_vertexes[prev_idx], new_edges[i], old_hf->face());
+
+        hf->twin()->set_neighbors(new_halfedges[2 * prev_idx + 1], hf, new_vertexes[i], new_edges[i], face);
+
+        new_edges[i]->halfedge() = hf;
+
+        old_hf_prev->next() = hf;
+
+        old_hf->vertex() = new_vertexes[i];
+        new_vertexes[i]->halfedge() = hf->twin();
+
+        face->halfedge() = hf->twin();
+    }
+
+    erase(v);
+
+    return face;
 }
 
 /*
@@ -605,10 +696,35 @@ void Halfedge_Mesh::bevel_vertex_positions(const std::vector<Vec3>& start_positi
         h = h->next();
     } while(h != face->halfedge());
 
-    (void)new_halfedges;
-    (void)start_positions;
-    (void)face;
-    (void)tangent_offset;
+
+    for (size_t i = 0; i < new_halfedges.size(); ++i) {
+        auto hf = new_halfedges[i];
+        auto vertex = hf->vertex();
+        auto outside_vertex = hf->twin()->next()->twin()->vertex();
+
+        auto direction = start_positions[i] - outside_vertex->pos;
+        direction = direction.unit();
+        vertex->pos += direction * tangent_offset;
+
+        auto distance_from_start = (start_positions[i] - vertex->pos).norm();
+        auto distance_from_end = (outside_vertex->pos - vertex->pos).norm();
+        auto original_distance = (start_positions[i] - outside_vertex->pos).norm();
+
+        // Clamp possible positions to stay between original vertexes.
+        if (distance_from_start > original_distance) {
+            if (distance_from_end > distance_from_start) {
+                vertex->pos = start_positions[i];
+            } else {
+                vertex->pos = outside_vertex->pos;
+            }
+        } else if (distance_from_end > original_distance) {
+            if (distance_from_end < distance_from_start) {
+                vertex->pos = outside_vertex->pos;
+            } else {
+                vertex->pos = start_positions[i];
+            }
+        }
+    }
 }
 
 /*

@@ -291,9 +291,40 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
     the new vertex created by the collapse.
 */
 std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_face(Halfedge_Mesh::FaceRef f) {
+    auto hf = f->halfedge();
+    // Grab all halfedges of this face, and their twins.
+    std::vector<HalfedgeRef> halfedges;
+    do {
+        halfedges.push_back(hf);
+        halfedges.push_back(hf->twin());
+        hf = hf->next();
+    } while (hf != f->halfedge());
 
-    (void)f;
-    return std::nullopt;
+    auto center_point = f->center();
+
+    // Iterate over all the halfedges we found, and collapse their edges.
+    // Topologically this will yield the same end result as collapsing the whole face.
+    // Geometrically last vertex might be in different spot, so we calculate its position above, 
+    // and save it in center_point.
+    std::optional<VertexRef> vertex = std::nullopt;
+    for (auto halfedge : halfedges) {
+        if (herased.count(halfedge) > 0) {
+            continue;
+        }
+        auto result = collapse_edge(halfedge->edge());
+        if (result) {
+            vertex = *result;
+        } else {
+            // If any of the edges can't be collapsed, then that means this face can't be either.
+            return std::nullopt;
+        }
+    }
+
+    if (vertex) {
+        vertex.value()->pos = center_point;
+    }
+
+    return vertex;
 }
 
 /*

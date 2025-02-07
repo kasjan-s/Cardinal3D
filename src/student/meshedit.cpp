@@ -132,9 +132,42 @@ std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_vertex(Halfedge_Mesh:
     merged face.
  */
 std::optional<Halfedge_Mesh::FaceRef> Halfedge_Mesh::erase_edge(Halfedge_Mesh::EdgeRef e) {
+    if (e->on_boundary())
+        return std::nullopt;
 
-    (void)e;
-    return std::nullopt;
+    auto hf = e->halfedge();
+    auto hf_twin = hf->twin();
+    
+    auto v0 = hf->vertex();
+    auto v1 = hf->vertex();
+    // If any of endpoints has a degree 2, erasing this edge would lead to degenerate case
+    // with a leaf point.
+    if (v0->degree() + v0->on_boundary() == 2 || v1->degree() + v1->on_boundary() == 2) 
+        return std::nullopt;
+
+    auto hf_prev = find_previous_halfedge(hf);
+    auto hf_twin_prev = find_previous_halfedge(hf_twin);
+
+    hf_prev->next() = hf_twin->next();
+    hf_twin_prev->next() = hf->next();
+
+    auto iter = hf_prev;
+    do {
+        iter->face() = hf->face();
+        iter = iter->next();
+    } while (iter != hf_prev);
+
+    hf->vertex()->halfedge() = hf_twin->next();
+    hf_twin->vertex()->halfedge() = hf->next();
+
+    hf->face()->halfedge() = hf->next();
+
+    erase(hf_twin->face());
+    erase(e);
+    erase(hf);
+    erase(hf_twin);
+
+    return hf->face();
 }
 
 void Halfedge_Mesh::erase_halfedge_face(Halfedge_Mesh::HalfedgeRef hf) {

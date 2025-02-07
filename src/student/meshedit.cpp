@@ -222,7 +222,7 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
     auto hf = e->halfedge();
     auto hf_twin = hf->twin();
     auto v0 = hf->vertex();
-    auto v1 = hf->twin()->vertex();
+    auto v1 = hf_twin->vertex();
 
     auto face = hf->face();
     auto face_twin = hf_twin->face();
@@ -235,23 +235,25 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
     std::set<HalfedgeRef> halfedges;
     auto hf_iter = v0->halfedge()->twin();
     do {
-        if (hf_iter->vertex() != v1) {
-            halfedges.insert(hf_iter->twin());
-        }
-        hf_iter = hf_iter->next()->twin();
+        hf_iter = hf_iter->next();
+        halfedges.insert(hf_iter);
+        hf_iter = hf_iter->twin();
     } while (hf_iter != v0->halfedge()->twin());
 
     hf_iter = v1->halfedge()->twin();
     do {
-        if (hf_iter->vertex() != v0) {
-            halfedges.insert(hf_iter->twin());
-        }
-        hf_iter = hf_iter->next()->twin();
+        hf_iter = hf_iter->next();
+        halfedges.insert(hf_iter);
+        hf_iter = hf_iter->twin();
     } while (hf_iter != v1->halfedge()->twin());
+
+    halfedges.erase(hf);
+    halfedges.erase(hf_twin);
 
     // Check if any of faces will collapse as well
     if (face->degree() == 3) {
         halfedges.erase(hf->next());
+        halfedges.erase(hf->next()->next());
         erase_halfedge_face(hf);
     } else {
         // If it won't, we just need to connect prev and next halfedges.
@@ -262,6 +264,7 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
     }
 
     if (face_twin->degree() == 3) {
+        halfedges.erase(hf_twin->next());
         halfedges.erase(hf_twin->next()->next());
         erase_halfedge_face(hf_twin);
     } else {
@@ -1152,7 +1155,6 @@ void Halfedge_Mesh::loop_subdivide() {
     (e.g. you may want to return false if this is not a triangle mesh)
 */
 bool Halfedge_Mesh::isotropic_remesh() {
-
     // Compute the mean edge length.
     // Repeat the four main steps for 5 or 6 iterations
     // -> Split edges much longer than the target length (being careful about

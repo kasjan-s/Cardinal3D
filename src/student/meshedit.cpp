@@ -17,16 +17,36 @@ Halfedge_Mesh::HalfedgeRef find_previous_halfedge(const Halfedge_Mesh::HalfedgeR
     return prev;
 }
 
-bool is_face_safe_to_collapse(const Halfedge_Mesh::FaceRef face, const Halfedge_Mesh::EdgeRef edge) {
+int vertex_degree(const Halfedge_Mesh::VertexRef v) {
+    int degree = 0;
+    auto hf = v->halfedge();
+    do {
+        ++degree;
+        hf = hf->twin()->next();
+    } while (hf != v->halfedge());
+
+    return degree;
+}
+
+bool is_face_safe_to_collapse(const Halfedge_Mesh::HalfedgeRef hf) {
+    if (hf->is_boundary())
+        return true;
+
+    auto face = hf->face();
     if (face->degree() > 3)
         return true;
 
+    auto opposite_vertex = hf->next()->next()->vertex();
+    if (vertex_degree(opposite_vertex) < 3)
+        return false;
+
+    // Check for boundaries.
     int boundary_edges = 0;
-    auto hf = face->halfedge();
+    auto iter = hf;
     do {
-        boundary_edges += hf->edge()->on_boundary() ? 1 : 0;
-        hf = hf->next();
-    } while (hf != face->halfedge());
+        boundary_edges += iter->edge()->on_boundary() ? 1 : 0;
+        iter = iter->next();
+    } while (iter != hf);
 
     // Mesh is a singular triangle that would become 2-edge line.
     if (boundary_edges == 3) 
@@ -35,7 +55,7 @@ bool is_face_safe_to_collapse(const Halfedge_Mesh::FaceRef face, const Halfedge_
     // This will also lead to a 2-edge line, with a hanging boundary vertex.
     // However if edge IS on the boundary, then collapsing is safe to do, we'll 
     // just end up with a new boundary edge.
-    if (boundary_edges == 2 && !edge->on_boundary()) 
+    if (boundary_edges == 2 && !hf->edge()->on_boundary()) 
         return false;
 
     return true;
@@ -228,7 +248,7 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
     auto face = hf->face();
     auto face_twin = hf_twin->face();
 
-    if (!is_face_safe_to_collapse(face, e) || !is_face_safe_to_collapse(face_twin, e)) {
+    if (!is_face_safe_to_collapse(hf) || !is_face_safe_to_collapse(hf_twin)) {
         return std::nullopt;
     }
 

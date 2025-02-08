@@ -1416,6 +1416,10 @@ bool Halfedge_Mesh::simplify() {
     //    in face_quadrics
 
     for (FaceRef fc = faces_begin(); fc != faces_end(); fc++) {
+        if (fc->degree() != 3) {
+            return false;
+        }
+
         if (fc->is_boundary()) {
             continue;
         }
@@ -1477,7 +1481,12 @@ bool Halfedge_Mesh::simplify() {
     size_t target_triangle_count = triangle_count / 4;
     size_t current_triangle_count = triangle_count;
 
-    while(current_triangle_count > target_triangle_count){
+    while(current_triangle_count > target_triangle_count) {
+        if (edge_queue.size() < 3) {
+            // We can't do better than a single triangle.
+            break;
+        }
+
         // 1. Get the cheapest edge from the queue
         Edge_Record record = edge_queue.top();
         
@@ -1521,7 +1530,6 @@ bool Halfedge_Mesh::simplify() {
         std::optional<Halfedge_Mesh::VertexRef> collapsed_vertex_opt = collapse_edge_erase(e);
 
         if (collapsed_vertex_opt.has_value()) {
-
             // 6. Set the quadric of the new vertex to the quadric computed in Step 3.
             VertexRef collapsed_vertex = collapsed_vertex_opt.value();
             current_triangle_count -= 2;
@@ -1533,13 +1541,14 @@ bool Halfedge_Mesh::simplify() {
             do {
                 EdgeRef e = h->edge();
                 Edge_Record record(vertex_quadrics, e);
+                edge_records[e] = record;
+                edge_queue.insert(record);
                 h = h->twin()->next();
                 
             } while (h != collapsed_vertex->halfedge());
-
-        }
+        } 
 
     }
 
-    return false;
+    return true;
 }

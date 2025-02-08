@@ -28,6 +28,17 @@ int vertex_degree(const Halfedge_Mesh::VertexRef v) {
     return degree;
 }
 
+std::set<Halfedge_Mesh::VertexRef> adjacent_vertexes(const Halfedge_Mesh::VertexRef v) {
+    auto hf = v->halfedge();
+    std::set<Halfedge_Mesh::VertexRef> adjacent;
+
+    do {
+        adjacent.insert(hf->twin()->vertex());
+        hf = hf->twin()->next();
+    } while (hf != v->halfedge());
+    return adjacent;
+}
+
 bool is_face_safe_to_collapse(const Halfedge_Mesh::HalfedgeRef hf) {
     if (hf->is_boundary())
         return true;
@@ -247,9 +258,37 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
 
     auto face = hf->face();
     auto face_twin = hf_twin->face();
+    bool face_is_triangle = face->degree() == 3;
+    bool face_twin_is_triangle = face_twin->degree() == 3;
+    std::optional<VertexRef> face_opposite_v = std::nullopt;
+    std::optional<VertexRef> face_twin_opposite_v = std::nullopt;
+    if (face_is_triangle) {
+        face_opposite_v = hf->next()->next()->vertex();
+    }
+    if (face_twin_is_triangle) {
+        face_twin_opposite_v = hf_twin->next()->next()->vertex();
+    }
 
     if (!is_face_safe_to_collapse(hf) || !is_face_safe_to_collapse(hf_twin)) {
         return std::nullopt;
+    }
+
+    auto v0_adjacent = adjacent_vertexes(hf->vertex());
+    auto v1_adjacent = adjacent_vertexes(hf->twin()->vertex());
+    std::vector<VertexRef> intersection;
+    std::set_intersection(v0_adjacent.begin(), v0_adjacent.end(), 
+                          v1_adjacent.begin(), v1_adjacent.end(), back_inserter(intersection));
+    for (auto common_vertex : intersection) {
+        // The only common vertexes should be the ones that are part of 
+        // face or face_twin, and that face is a triangle.
+        if (!face_is_triangle && !face_is_triangle) {
+            return std::nullopt;
+        }
+        
+        if (!(face_is_triangle && common_vertex == *face_opposite_v) &&
+            !(face_twin_is_triangle && common_vertex == *face_twin_opposite_v)) {
+            return std::nullopt;
+        }
     }
 
     // Grab all half-edges from v0 or v1.
@@ -271,8 +310,7 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
     halfedges.erase(hf);
     halfedges.erase(hf_twin);
 
-    // Check if any of faces will collapse as well
-    if (face->degree() == 3) {
+    if (face_is_triangle) {
         halfedges.erase(hf->next());
         halfedges.erase(hf->next()->next());
         erase_halfedge_face(hf);
@@ -284,7 +322,7 @@ std::optional<Halfedge_Mesh::VertexRef> Halfedge_Mesh::collapse_edge(Halfedge_Me
         erase(hf);
     }
 
-    if (face_twin->degree() == 3) {
+    if (face_twin_is_triangle) {
         halfedges.erase(hf_twin->next());
         halfedges.erase(hf_twin->next()->next());
         erase_halfedge_face(hf_twin);

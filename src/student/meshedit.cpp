@@ -1245,6 +1245,45 @@ struct Edge_Record {
         //    Edge_Record::optimal.
         // -> Also store the cost associated with collapsing this edge in
         //    Edge_Record::cost.
+        const float EPSILON = 1e-6f; 
+
+        // -> Build the 3x3 linear system whose solution minimizes the quadric error
+        //    associated with these two endpoints.
+        //    Ax = b (see development guide)
+        Mat4 K_1 =  vertex_quadrics[e->halfedge()->vertex()];
+        Mat4 K_2 = vertex_quadrics[e->halfedge()->twin()->vertex()];
+        Mat4 K_ = K_1 + K_2;
+
+        // Putting last 4 row / column equal to identity 
+        Mat4 A = K_;
+        A.cols[0][3] = 0;
+        A.cols[1][3] = 0;
+        A.cols[2][3] = 0;
+        A.cols[3][3] = 1;
+
+        A.cols[3][0] = 0;
+        A.cols[3][1] = 0;
+        A.cols[3][2] = 0;
+
+        Vec3 b(-K_[3][0],-K_[3][1], -K_[3][2]);
+
+        // -> Use this system to solve for the optimal position, and store it in
+        //    Edge_Record::optimal.
+        // Degenerate case (to check here. I put mid point but might be wrong)
+        if (fabsf(A.det()) < EPSILON) {
+            Vec3 midpoint = 0.5f * (e->halfedge()->vertex()->center() + 
+                            e->halfedge()->twin()->vertex()->center());
+            optimal = midpoint;
+
+        } else {
+            optimal = A.inverse() * b;
+        }
+
+        // -> Also store the cost associated with collapsing this edge in
+        //    Edge_Record::cost.
+        //    cost = x_T * K_ * x
+        cost = dot(Vec4(optimal, 1.0f), K_ * Vec4(optimal, 1.0f));
+        
     }
     Halfedge_Mesh::EdgeRef edge;
     Vec3 optimal;
@@ -1371,6 +1410,136 @@ bool Halfedge_Mesh::simplify() {
     // The rest of the codebase will automatically call validate() after each op,
     // but here simply calling collapse_edge() will not erase the elements.
     // You should use collapse_edge_erase() instead for the desired behavior.
+
+    // -> Compute initial quadrics for each face by simply writing the plane equation
+    //    for the face in homogeneous coordinates. These quadrics should be stored
+    //    in face_quadrics
+
+    for (FaceRef fc = faces_begin(); fc != faces_end(); fc++) {
+        if (fc->is_boundary()) {
+            continue;
+        }
+        
+        Vec3 N = fc->normal().normalize();
+
+        Vec3 p = fc->halfedge()->vertex()->center();
+        float a = N[0];
+        float b = N[1];
+        float c = N[2];
+        float d = -dot(N, p);
+
+        Vec4 v = Vec4(a, b, c, d);
+        Mat4 K_face_quadrics = outer(v, v);
+
+        face_quadrics[fc] = K_face_quadrics;
+    }
+
+    // -> Compute an initial quadric for each vertex as the sum of the quadrics
+    //    associated with the incident faces, storing it in vertex_quadrics
+    //    boundary faces are discarded when accumulating
+
+    for (VertexRef vx = vertices_begin(); vx != vertices_end(); vx++) {
+        
+        HalfedgeRef h = vx->halfedge();
+        Mat4 K_vx = Mat4::Zero;
+
+        do {
+            FaceRef fc = h->face();
+            if (fc->is_boundary()) {
+                h = h->twin()->next();
+            } else {
+                K_vx += face_quadrics[fc];
+                h = h->twin()->next();
+            }
+        } while (h != vx->halfedge());
+
+        vertex_quadrics[vx] = K_vx;
+
+    }
+
+    // -> Build a priority queue of edges according to their quadric error cost,
+    //    i.e., by building an Edge_Record for each edge and sticking it in the
+    //    queue. You may want to use the above PQueue<Edge_Record> for this.
+
+    for (EdgeRef e = edges_begin(); e != edges_end(); e++) {
+        
+        Edge_Record record(vertex_quadrics, e);
+        edge_records[e] = record;
+        edge_queue.insert(record);
+
+    }
+
+    size_t triangle_count = 0;
+    for (FaceRef fc = faces_begin(); fc != faces_end(); fc++) {
+        triangle_count++;
+    }
+
+    size_t target_triangle_count = triangle_count / 4;
+    size_t current_triangle_count = triangle_count;
+
+    while(current_triangle_count > target_triangle_count){
+        // 1. Get the cheapest edge from the queue
+        Edge_Record record = edge_queue.top();
+        
+        // 2. Remove the cheapest edge from the queue by calling pop()
+        edge_queue.pop();
+        
+        // 3. Compute the new quadric by summing the quadrics at its two endpoints
+        EdgeRef e = record.edge;
+        Mat4 K_1 =  vertex_quadrics[e->halfedge()->vertex()];
+        Mat4 K_2 = vertex_quadrics[e->halfedge()->twin()->vertex()];
+        Mat4 K_ = K_1 + K_2;
+
+        // 4. Remove any edge touching either of its endpoints from the queue.
+        VertexRef v1 = e->halfedge()->vertex();
+        VertexRef v2 = e->halfedge()->twin()->vertex();
+
+        HalfedgeRef h1 = v1->halfedge();
+        HalfedgeRef h2 = v2->halfedge();
+
+        do {
+            if (h1->edge() != e) {
+                
+                EdgeRef e_to_remove = h1->edge();
+                Edge_Record record_to_remove = edge_records[e_to_remove];
+                edge_queue.remove(record_to_remove);
+            }
+            h1 = h1->twin()->next();
+        } while (h1 != v1->halfedge());
+
+        do {
+            if (h2->edge() != e) {
+                
+                EdgeRef e_to_remove = h2->edge();
+                Edge_Record record_to_remove = edge_records[e_to_remove];
+                edge_queue.remove(record_to_remove);
+            }
+            h2 = h2->twin()->next();
+        } while (h2 != v2->halfedge());
+
+        // 5. Collapse the edge
+        std::optional<Halfedge_Mesh::VertexRef> collapsed_vertex_opt = collapse_edge_erase(e);
+
+        if (collapsed_vertex_opt.has_value()) {
+
+            // 6. Set the quadric of the new vertex to the quadric computed in Step 3.
+            VertexRef collapsed_vertex = collapsed_vertex_opt.value();
+            current_triangle_count -= 2;
+            vertex_quadrics[collapsed_vertex] = K_;
+
+            // 7. Insert any edge touching the new vertex into the queue, creating new edge records for each of them
+            HalfedgeRef h = collapsed_vertex->halfedge();
+
+            do {
+                EdgeRef e = h->edge();
+                Edge_Record record(vertex_quadrics, e);
+                h = h->twin()->next();
+                
+            } while (h != collapsed_vertex->halfedge());
+
+        }
+
+    }
 
     return false;
 }

@@ -1,0 +1,32 @@
+
+# Authors
+Kasjan Siwek - kasjan
+Simone Surdi - ssurdi
+
+Kasjan Siwek:
+VertexBevel - advanced task
+FaceBevel - basic task
+EraseVertex - advanced task
+EraseEdge - advanced task
+EdgeCollapse - basic task
+    Collapsing a boundary edge - advanced task
+FaceCollapse - advanced task
+EdgeFlip - basic task
+EdgeSplit - basic task
+    Splitting a boundary edge - advanced task
+LoopSubdivision - advanced task, depends on EdgeSplit and EdgeFlip
+IsotropicRemeshing - advanced task, depends on EdgeSplit, EdgeFlip, and EdgeCollapse
+3D Model - basic
+
+Simone Surdi:
+Triangulation - basic task
+LinearSubdivision - basic task
+CatmullClarkSubdivision - basic task
+Simplification - basic task
+
+
+Notes:
+Tested against all cases from the handouts, and tried to do extra verification as well.
+More specific comments are in each tasks's implementaion.
+The beautiful 3D model shows a rare two-teethed dragon named Phteven, whose wings 
+are more of a fashion statement than a functional appendix.

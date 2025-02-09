@@ -1285,7 +1285,84 @@ bool Halfedge_Mesh::isotropic_remesh() {
     // but here simply calling collapse_edge() will not erase the elements.
     // You should use collapse_edge_erase() instead for the desired behavior.
 
-    return false;
+    for (auto f =faces_begin(); f != faces_end(); ++f) {
+        if (f->degree() != 3) 
+            return false;
+    }
+
+    for (int i = 0; i < 6; ++i) {
+        float cumulative_average = 0.0;
+        int edge_count = 0;
+        for (auto e = edges_begin(); e != edges_end(); ++e) {
+            cumulative_average = (e->length() + edge_count * cumulative_average) / (edge_count + 1);
+            ++edge_count;
+        }
+
+        for (auto e = edges_begin(); e != edges_end();) {
+            auto e_next = std::next(e);
+            if (e->length() > (4.0 * cumulative_average) / 3.0) {
+                split_edge(e);
+            }
+            e = e_next;
+        }
+
+        for (auto e = edges_begin(); e != edges_end();) {
+            auto e_next = std::next(e);
+            if (eerased.count(e) == 0) {
+                if (e->length() < (4.0 * cumulative_average) / 5.0) {
+                    collapse_edge(e);
+                }
+            }
+            e = e_next;
+        }
+
+        do_erase();
+
+        for (auto e = edges_begin(); e != edges_end(); ++e) {
+            int a1 = e->halfedge()->vertex()->degree();
+            int a2 = e->halfedge()->twin()->vertex()->degree();
+            int b1 = e->halfedge()->next()->twin()->vertex()->degree();
+            int b2 = e->halfedge()->twin()->next()->twin()->vertex()->degree();
+            
+            // |a1-6| + |a2-6| + |b1-6| + |b2-6|
+            int current_deviation = std::abs(a1 - 6) + std::abs(a2 - 6) + std::abs(b1 - 6) + std::abs(b2 - 6);
+            int after_flip_deviation = std::abs(a1 - 1 - 6 ) + std::abs(a2 - 1 - 6) + std::abs(b1 + 1 - 6) + std::abs(b2 + 1 - 6);
+
+            if (after_flip_deviation < current_deviation) {
+                flip_edge(e);
+            }
+        }
+
+        for (int j = 0; j < 20; ++j) {
+            for (auto v = vertices_begin(); v != vertices_end(); ++v) {
+                v->new_pos = v->neighborhood_center();
+            }
+            for (auto v = vertices_begin(); v != vertices_end(); ++v) {
+                float step = 0.2;
+                Vec3 direction = v->new_pos - v->pos; 
+                auto v_normal = v->normal();
+                if (!std::isfinite(v_normal.x) ||!std::isfinite(v_normal.y) || !std::isfinite(v_normal.z)) {
+                    // This vertex's position seems to be so centric and symmetrical that its normal 
+                    // is approximetaly 0. Skip it.
+                    //
+                    // Using std::isfinite instead of comparing against small values, because
+                    // VectorRef::normal() performs x /= n division in its implementation, so we're
+                    // losing information here, and v_normal's coordinates are NaN.
+                    // Technically this check could also catch other problems like two overlapping edges,
+                    // but I haven't seen this during testing, and split_edge, collapse_edge and flip_edge
+                    // should be protecting us from that.
+                    continue;
+                }
+
+                Vec3 tangent_direction = direction - dot(v->normal(), direction) * v->normal();  
+                Vec3 new_pos = v->pos + step * tangent_direction;
+                
+                v->pos = new_pos;
+            }
+        }
+    }
+
+    return true;
 }
 
 /* Helper type for quadric simplification */

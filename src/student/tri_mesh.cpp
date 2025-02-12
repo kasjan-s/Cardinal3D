@@ -11,9 +11,17 @@ BBox Triangle::bbox() const {
 
     // Beware of flat/zero-volume boxes! You may need to
     // account for that here, or later on in BBox::intersect
+    Tri_Mesh_Vert v_0 = vertex_list[v0];
+    Tri_Mesh_Vert v_1 = vertex_list[v1];
+    Tri_Mesh_Vert v_2 = vertex_list[v2];
+    float x_min = std::min(std::min(v_0.position.x, v_1.position.x), v_2.position.x);
+    float y_min = std::min(std::min(v_0.position.y, v_1.position.y), v_2.position.y);
+    float z_min = std::min(std::min(v_0.position.z, v_1.position.z), v_2.position.z);
+    float x_max = std::max(std::min(v_0.position.x, v_1.position.x), v_2.position.x);
+    float y_max = std::max(std::min(v_0.position.y, v_1.position.y), v_2.position.y);
+    float z_max = std::max(std::min(v_0.position.z, v_1.position.z), v_2.position.z);
 
-    BBox box;
-    return box;
+    return BBox(Vec3(x_min, y_min, z_min), Vec3(x_max, y_max, z_max));
 }
 
 Trace Triangle::hit(const Ray& ray) const {
@@ -24,25 +32,37 @@ Trace Triangle::hit(const Ray& ray) const {
     Tri_Mesh_Vert v_0 = vertex_list[v0];
     Tri_Mesh_Vert v_1 = vertex_list[v1];
     Tri_Mesh_Vert v_2 = vertex_list[v2];
-
-    // here just to avoid unused variable warnings, students should remove the following three lines.
-    (void)v_0;
-    (void)v_1;
-    (void)v_2;
     
     // TODO (PathTracer): Task 2
     // Intersect this ray with a triangle defined by the above three points.
     // Intersection should yield a ray t-value, and a hit point (u,v) on the surface of the triangle
 
     // You'll need to fill in a "Trace" struct describing information about the hit (or lack of hit)
+    
+    Vec3 col1 = v_1.position - v_0.position;
+    Vec3 col2 = v_2.position - v_0.position;
+    Vec3 col3 = -ray.dir;
+    Mat4 M(Vec4(col1, 0.0f), Vec4(col2, 0.0f), Vec4(col3, 0.0f), Vec4(0.0f, 0.0f, 0.0f, 1.0f));
+    if (M.det() == 0) {
+        Trace ret;
+        ret.origin = ray.point;
+        ret.hit = false;
+        return ret;
+    }
 
+    Vec3 x = ray.point - v_0.position;
+    Vec3 uvt = M.inverse() * x;
+    float u = uvt.x;
+    float v = uvt.y;
     Trace ret;
     ret.origin = ray.point;
-    ret.hit = false;       // was there an intersection?
-    ret.distance = 0.0f;   // at what distance did the intersection occur?
-    ret.position = Vec3{}; // where was the intersection?
-    ret.normal = Vec3{};   // what was the surface normal at the intersection?
-                           // (this should be interpolated between the three vertex normals)
+    ret.hit = (u >= 0 && v >= 0 && u + v <= 1.0f);
+    if (ret.hit) {
+        ret.distance = uvt.z;
+        ret.position = v_0.position + u * (v_1.position - v_0.position) + v * (v_2.position - v_0.position); 
+        ret.normal = u * v_1.normal + v * v_2.normal + (1 - u - v) * v_0.normal;
+    }
+
     return ret;
 }
 

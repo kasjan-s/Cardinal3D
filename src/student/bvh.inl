@@ -86,12 +86,18 @@ void BVH<Primitive>::build(std::vector<Primitive>&& prims, size_t max_leaf_size)
         }
 
         if (node.size == 2) {
+            // Just split into two nodes directly to save work and to not have to deal with edge cases where
+            // one of the nodes might be exactly on the bin boundary (or where we run into floating point errors).
             BBox split_leftBox;
             split_leftBox.enclose(primitives[node.start].bbox());
             BBox split_rightBox;
             split_rightBox.enclose(primitives[node.start + 1].bbox());
-            // Just split into two nodes directly to save work and to not have to deal with edge cases where
-            // one of the nodes might be exactly on the bin boundary (or where we run into floating point errors).
+
+            // Same boundary, just return, it makes no difference if we split.
+            if (split_leftBox.min == split_rightBox.min && split_leftBox.max == split_rightBox.max) {
+                return;
+            }
+
             size_t startl = node.start;
             size_t node_addr_l = new_node();
             size_t node_addr_r = new_node();
@@ -109,13 +115,6 @@ void BVH<Primitive>::build(std::vector<Primitive>&& prims, size_t max_leaf_size)
             return;
         }
 
-        // Create bounding boxes for children
-        BBox split_leftBox;
-        BBox split_rightBox;
-
-        auto node_begin = primitives.begin() + node.start;
-        auto node_end = node_begin + node.size;
-
         //  For each axis X,Y,Z:
         //     Try possible splits along axis, evaluate SAH for each
         //  Take minimum cost across all axes.
@@ -127,26 +126,43 @@ void BVH<Primitive>::build(std::vector<Primitive>&& prims, size_t max_leaf_size)
             X, Y, Z
         };
 
-        struct SplitCost {
+        struct SplitCandidate {
             float cost;
             size_t left_bin_count;
             size_t right_bin_count;
-            bool operator<(const SplitCost& other) const {
+            float coord_min;
+            float coord_max;
+            float boundary;
+            Axis axis;
+            bool operator<(const SplitCandidate& other) const {
                 return cost < other.cost;
             }
         };
 
-        auto calculateBinCosts = [&node_begin, &node_end](float coord_min, float coord_max, std::function<float(const Primitive&)> getCoord) {
+        auto calculateBinCosts = [](const std::vector<Primitive>& primitives, size_t begin, size_t end, float coord_min, float coord_max, Axis axis) {
             float bin_size = (coord_max - coord_min) / kBvhBinCount;
             std::vector<std::pair<BBox, int>> split(kBvhBinCount, std::make_pair(BBox(), 0));
-            for (auto obj_iter = node_begin; obj_iter != node_end; ++obj_iter) {
-                float coord = getCoord(*obj_iter);
+            for (size_t idx = begin; idx < end; ++idx) {
+                auto& obj = primitives[idx];
+                float coord;
+                switch (axis) {
+                    case Axis::X:
+                        coord = obj.bbox().center().x;
+                        break;
+                    case Axis::Y:
+                        coord = obj.bbox().center().y;
+                        break;
+                    case Axis::Z:
+                        coord = obj.bbox().center().z;
+                        break;
+                }
                 int bin = std::floor((coord - coord_min) / bin_size);
                 bin = std::clamp(bin, 0, kBvhBinCount - 1);
-                split[bin].first.enclose(obj_iter->bbox());
+                split[bin].first.enclose(obj.bbox());
                 split[bin].second++;
             }
-            std::vector<SplitCost> costs;
+
+            std::vector<SplitCandidate> costs;
             for (int i = 0; i < kBvhBinCount - 1; ++i) {
                 int count_left = 0;
                 int count_right = 0;
@@ -161,64 +177,35 @@ void BVH<Primitive>::build(std::vector<Primitive>&& prims, size_t max_leaf_size)
                         count_right += split[j].second;
                     }
                 }
-                SplitCost bin_cost;
+
+                SplitCandidate bin_cost;
                 bin_cost.cost = left.surface_area() * count_left + right.surface_area() * count_right;
                 bin_cost.left_bin_count = count_left;
                 bin_cost.right_bin_count = count_right;
+                bin_cost.axis = axis;
+                bin_cost.coord_min = coord_min;
+                bin_cost.coord_max = coord_max;
+                bin_cost.boundary = coord_min + (i + 1) * bin_size;
                 costs.push_back(bin_cost);
             }
             return costs;
         };
         BBox& bb = node.bbox;
-        std::vector<SplitCost> x_bin_costs = calculateBinCosts(bb.min.x, bb.max.x, [](const Primitive& obj) { return obj.bbox().center().x; });
-        std::vector<SplitCost> y_bin_costs = calculateBinCosts(bb.min.y, bb.max.y, [](const Primitive& obj) { return obj.bbox().center().y; });
-        std::vector<SplitCost> z_bin_costs = calculateBinCosts(bb.min.z, bb.max.z, [](const Primitive& obj) { return obj.bbox().center().z; });
+        std::vector<SplitCandidate> x_bin_costs = calculateBinCosts(primitives, node.start, node.start + node.size, bb.min.x, bb.max.x, Axis::X);
+        std::vector<SplitCandidate> y_bin_costs = calculateBinCosts(primitives, node.start, node.start + node.size, bb.min.y, bb.max.y, Axis::Y);
+        std::vector<SplitCandidate> z_bin_costs = calculateBinCosts(primitives, node.start, node.start + node.size, bb.min.z, bb.max.z, Axis::Z);
 
         auto x_min_cost_iter = std::min_element(x_bin_costs.begin(), x_bin_costs.end());
         auto y_min_cost_iter = std::min_element(y_bin_costs.begin(), y_bin_costs.end());
         auto z_min_cost_iter = std::min_element(z_bin_costs.begin(), z_bin_costs.end());
 
-        struct SplitCandidate {
-            float cost;
-            float boundary_split;
-            Axis axis;
-            std::function<bool(const Primitive&)> split_function;
-        };
-
-        std::vector<SplitCandidate> candidates;
-        
-        // Only consider if split is non-0.
-        if (x_min_cost_iter->left_bin_count != 0 && x_min_cost_iter->right_bin_count != 0) {
-            SplitCandidate x_candidate;
-            x_candidate.cost = x_min_cost_iter->cost;
-            int boundary_index = std::distance(x_bin_costs.begin(), x_min_cost_iter);
-            float bin_size = (bb.max.x - bb.min.x) / kBvhBinCount;
-            float boundary_split = bb.min.x + bin_size * (boundary_index + 1);
-            x_candidate.boundary_split = boundary_split;
-            x_candidate.axis = Axis::X;
-            candidates.push_back(x_candidate);
-        }
-
-        if (y_min_cost_iter->left_bin_count != 0 && y_min_cost_iter->right_bin_count != 0) {
-            SplitCandidate y_candidate;
-            y_candidate.cost = y_min_cost_iter->cost;
-            int boundary_index = std::distance(y_bin_costs.begin(), y_min_cost_iter);
-            float bin_size = (bb.max.y - bb.min.y) / kBvhBinCount;
-            float boundary_split = bb.min.y + bin_size * (boundary_index + 1);
-            y_candidate.boundary_split = boundary_split;
-            y_candidate.axis = Axis::Y;
-            candidates.push_back(y_candidate);
-        }
-
-        if (z_min_cost_iter->left_bin_count != 0 && z_min_cost_iter->right_bin_count != 0) {
-            SplitCandidate z_candidate;
-            z_candidate.cost = z_min_cost_iter->cost;
-            int boundary_index = std::distance(z_bin_costs.begin(), z_min_cost_iter);
-            float bin_size = (bb.max.z - bb.min.z) / kBvhBinCount;
-            float boundary_split = bb.min.z + bin_size * (boundary_index + 1);
-            z_candidate.boundary_split = boundary_split;
-            z_candidate.axis = Axis::Z;
-            candidates.push_back(z_candidate);
+        std::vector<SplitCandidate> candidates = {*x_min_cost_iter, *y_min_cost_iter, *z_min_cost_iter};
+        for (auto iter = candidates.begin(); iter != candidates.end();) {
+            if (iter->left_bin_count == 0 || iter->right_bin_count == 0) {
+                iter = candidates.erase(iter);
+            }  else {
+                ++iter;
+            }
         }
         
         if (candidates.empty())
@@ -246,12 +233,15 @@ void BVH<Primitive>::build(std::vector<Primitive>&& prims, size_t max_leaf_size)
             } 
         }
 
-        // auto split_iter = std::partition(node_begin, node_end, split_function);
+        // Create bounding boxes for children
+        BBox split_leftBox;
+        BBox split_rightBox;
+
         int left = node.start;
         int right = node.start + node.size - 1;
         size_t left_count = 0;
         while (left <= right) {
-            if (axis_coord(primitives[left]) <= best_candidate.boundary_split) {
+            if (axis_coord(primitives[left]) <= best_candidate.boundary) {
                 std::swap(primitives[left], primitives[right]);
                 split_rightBox.enclose(primitives[right].bbox());
                 --right;
@@ -261,32 +251,16 @@ void BVH<Primitive>::build(std::vector<Primitive>&& prims, size_t max_leaf_size)
                 ++left_count;
             }
         }
-
-        // auto split_iter = std::partition(node_begin, node_end, [x_center](const Primitive& obj) {
-        //     return obj.bbox().center().x < x_center;
-        // });
-        // for (auto iter = node_begin; iter != split_iter; ++iter) {
-        //     split_leftBox.enclose(iter->bbox());
-        // }
-        // for (auto iter = split_iter; iter != node_end; ++iter) {
-        //     split_rightBox.enclose(iter->bbox());
-        // }
-
-        // Note that by construction in this simple example, the primitives are
-        // contiguous as required. But in the students real code, students are
-        // responsible for reorganizing the primitives in the primitives array so that
-        // after a SAH split is computed, the chidren refer to contiguous ranges of primitives.
-
-        size_t startl = node.start;  // starting prim index of left child
-        // size_t rangel = std::distance(node_begin, split_iter);  // number of prims in left child
-        size_t rangel = left_count;
-        size_t startr = node.start + rangel;  // starting prim index of right child
-        size_t ranger = node.size - rangel; // number of prims in right child
-
-        if (rangel == 0 || ranger == 0) {
-            std::cerr << std::max(rangel, ranger) << std::endl;
+        
+        // Edge case where end-objects were directly on the boundary.
+        if (left_count == 0 || left_count == node.size) {
             return;
         }
+        
+        size_t startl = node.start;  // starting prim index of left child
+        size_t rangel = left_count; // number of prims in left child
+        size_t startr = node.start + rangel;  // starting prim index of right child
+        size_t ranger = node.size - rangel; // number of prims in right child
 
         // create child nodes
         size_t node_addr_l = new_node();

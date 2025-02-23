@@ -256,7 +256,7 @@ void BVH<Primitive>::build(std::vector<Primitive>&& prims, size_t max_leaf_size)
         if (left_count == 0 || left_count == node.size) {
             return;
         }
-        
+
         size_t startl = node.start;  // starting prim index of left child
         size_t rangel = left_count; // number of prims in left child
         size_t startr = node.start + rangel;  // starting prim index of right child
@@ -311,8 +311,6 @@ Trace BVH<Primitive>::hit(const Ray& ray) const {
             }
             return;
         } else {
-            // visit_node(nodes[node.l], ray, ret);
-            // visit_node(nodes[node.r], ray, ret);
             Vec2 left_times(0.0f, times[1]);
             Vec2 right_times(0.0f, times[1]);
             bool hit_left = nodes[node.l].bbox.hit(ray, left_times);
@@ -332,9 +330,11 @@ Trace BVH<Primitive>::hit(const Ray& ray) const {
 
             if (left_times[0] < right_times[0]) {
                 visit_node(nodes[node.l], ray, ret);
+                if (right_times[0] < ret.distance)
                     visit_node(nodes[node.r], ray, ret);
             } else {
                 visit_node(nodes[node.r], ray, ret);
+                if (right_times[0] < ret.distance)
                     visit_node(nodes[node.l], ray, ret);
             }
         }

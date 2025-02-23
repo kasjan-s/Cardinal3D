@@ -56,10 +56,16 @@ bool BBox::hit(const Ray& ray, Vec2& times) const {
     Vec2 in_box = intersection(x_range, y_range);
     in_box = intersection(in_box, z_range);
 
+    if (!intersects(in_box, ray.dist_bounds))
+        return false;
+
+    in_box = intersection(in_box, ray.dist_bounds);
+
     if (!intersects(in_box, times))
         return false;
 
     times = intersection(in_box, times);
+
 
     return true;
 }

@@ -59,9 +59,13 @@ Trace Triangle::hit(const Ray& ray) const {
     ret.origin = ray.point;
     ret.hit = (u >= 0 && v >= 0 && u + v <= 1.0f);
     if (ret.hit) {
-        ret.distance = uvt.z;
-        ret.position = v_0.position + u * (v_1.position - v_0.position) + v * (v_2.position - v_0.position); 
-        ret.normal = u * v_1.normal + v * v_2.normal + (1 - u - v) * v_0.normal;
+        if (uvt.z >= ray.dist_bounds[0] && uvt.z <= ray.dist_bounds[1]) {
+            ret.distance = uvt.z;
+            ret.position = v_0.position + u * (v_1.position - v_0.position) + v * (v_2.position - v_0.position); 
+            ret.normal = u * v_1.normal + v * v_2.normal + (1 - u - v) * v_0.normal;
+        } else {
+            ret.hit = false;
+        }
     }
 
     return ret;

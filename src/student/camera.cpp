@@ -14,8 +14,7 @@ Ray Camera::generate_ray(Vec2 screen_coord) const {
                        0.0f);
     Vec3 sensor_coords = bottom_left + sensor_offset;
 
-    Vec3 world_origin = iview * Vec3(0.0f, 0.0f, 0.0f);
-    Vec3 world_sensor = iview * sensor_coords;
-
-    return Ray(world_origin, world_sensor - world_origin);
+    Ray ray = Ray(Vec3(0.0f, 0.0f, 0.0f), sensor_coords);
+    ray.transform(iview);
+    return ray;
 }

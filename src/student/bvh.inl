@@ -2,8 +2,12 @@
 #include "../rays/bvh.h"
 #include "debug.h"
 #include <stack>
+#include <iostream>
 
 namespace PT {
+
+constexpr int kBvhBinCount = 8;
+constexpr float kMaxFloat = std::numeric_limits<float>::max();
 
 // construct BVH hierarchy given a vector of prims
 template<typename Primitive>
@@ -71,51 +75,241 @@ void BVH<Primitive>::build(std::vector<Primitive>&& prims, size_t max_leaf_size)
     node.bbox = bb;
     node.start = 0;
     node.size = primitives.size();
+    root_idx = root_node_addr;
 
-    // Create bounding boxes for children
-    BBox split_leftBox;
-    BBox split_rightBox;
+    std::function<void(size_t, std::vector<Node>&, std::vector<Primitive>&)> splitNode;
 
-    // compute bbox for left child
-    Primitive& p = primitives[0];
-    BBox pbb = p.bbox();
-    split_leftBox.enclose(pbb);
+    splitNode = [this, &splitNode](size_t node_index, std::vector<Node>& nodes, std::vector<Primitive>& primitives) {
+        Node& node = nodes[node_index];
+        if (node.size == 1) {
+            return;
+        }
 
-    // compute bbox for right child
-    for(size_t i = 1; i < primitives.size(); ++i) {
-        Primitive& p = primitives[i];
-        BBox pbb = p.bbox();
-        split_rightBox.enclose(pbb);
-    }
+        if (node.size == 2) {
+            BBox split_leftBox;
+            split_leftBox.enclose(primitives[node.start].bbox());
+            BBox split_rightBox;
+            split_rightBox.enclose(primitives[node.start + 1].bbox());
+            // Just split into two nodes directly to save work and to not have to deal with edge cases where
+            // one of the nodes might be exactly on the bin boundary (or where we run into floating point errors).
+            size_t startl = node.start;
+            size_t node_addr_l = new_node();
+            size_t node_addr_r = new_node();
+            nodes[node_index].l = node_addr_l;
+            nodes[node_index].r = node_addr_r;
 
-    // Note that by construction in this simple example, the primitives are
-    // contiguous as required. But in the students real code, students are
-    // responsible for reorganizing the primitives in the primitives array so that
-    // after a SAH split is computed, the chidren refer to contiguous ranges of primitives.
+            nodes[node_addr_l].bbox = split_leftBox;
+            nodes[node_addr_l].start = startl;
+            nodes[node_addr_l].size = 1;
 
-    size_t startl = 0;  // starting prim index of left child
-    size_t rangel = 1;  // number of prims in left child
-    size_t startr = startl + rangel;  // starting prim index of right child
-    size_t ranger = primitives.size() - rangel; // number of prims in right child
+            nodes[node_addr_r].bbox = split_rightBox;
+            nodes[node_addr_r].start = startl + 1;
+            nodes[node_addr_r].size = 1;
 
-    // create child nodes
-    size_t node_addr_l = new_node();
-    size_t node_addr_r = new_node();
-    nodes[root_node_addr].l = node_addr_l;
-    nodes[root_node_addr].r = node_addr_r;
+            return;
+        }
 
-    nodes[node_addr_l].bbox = split_leftBox;
-    nodes[node_addr_l].start = startl;
-    nodes[node_addr_l].size = rangel;
+        // Create bounding boxes for children
+        BBox split_leftBox;
+        BBox split_rightBox;
 
-    nodes[node_addr_r].bbox = split_rightBox;
-    nodes[node_addr_r].start = startr;
-    nodes[node_addr_r].size = ranger;
+        auto node_begin = primitives.begin() + node.start;
+        auto node_end = node_begin + node.size;
+
+        //  For each axis X,Y,Z:
+        //     Try possible splits along axis, evaluate SAH for each
+        //  Take minimum cost across all axes.
+        //  Partition primitives into a left and right child group
+        //  Compute left and right child bboxes
+        //  Make the left and right child nodes.
+
+        enum Axis {
+            X, Y, Z
+        };
+
+        struct SplitCost {
+            float cost;
+            size_t left_bin_count;
+            size_t right_bin_count;
+            bool operator<(const SplitCost& other) const {
+                return cost < other.cost;
+            }
+        };
+
+        auto calculateBinCosts = [&node_begin, &node_end](float coord_min, float coord_max, std::function<float(const Primitive&)> getCoord) {
+            float bin_size = (coord_max - coord_min) / kBvhBinCount;
+            std::vector<std::pair<BBox, int>> split(kBvhBinCount, std::make_pair(BBox(), 0));
+            for (auto obj_iter = node_begin; obj_iter != node_end; ++obj_iter) {
+                float coord = getCoord(*obj_iter);
+                int bin = std::floor((coord - coord_min) / bin_size);
+                bin = std::clamp(bin, 0, kBvhBinCount - 1);
+                split[bin].first.enclose(obj_iter->bbox());
+                split[bin].second++;
+            }
+            std::vector<SplitCost> costs;
+            for (int i = 0; i < kBvhBinCount - 1; ++i) {
+                int count_left = 0;
+                int count_right = 0;
+                BBox left;
+                BBox right;
+                for (int j = 0; j < kBvhBinCount; ++j) {
+                    if (j < i + 1) {
+                        left.enclose(split[j].first);
+                        count_left += split[j].second;
+                    } else {
+                        right.enclose(split[j].first);
+                        count_right += split[j].second;
+                    }
+                }
+                SplitCost bin_cost;
+                bin_cost.cost = left.surface_area() * count_left + right.surface_area() * count_right;
+                bin_cost.left_bin_count = count_left;
+                bin_cost.right_bin_count = count_right;
+                costs.push_back(bin_cost);
+            }
+            return costs;
+        };
+        BBox& bb = node.bbox;
+        std::vector<SplitCost> x_bin_costs = calculateBinCosts(bb.min.x, bb.max.x, [](const Primitive& obj) { return obj.bbox().center().x; });
+        std::vector<SplitCost> y_bin_costs = calculateBinCosts(bb.min.y, bb.max.y, [](const Primitive& obj) { return obj.bbox().center().y; });
+        std::vector<SplitCost> z_bin_costs = calculateBinCosts(bb.min.z, bb.max.z, [](const Primitive& obj) { return obj.bbox().center().z; });
+
+        auto x_min_cost_iter = std::min_element(x_bin_costs.begin(), x_bin_costs.end());
+        auto y_min_cost_iter = std::min_element(y_bin_costs.begin(), y_bin_costs.end());
+        auto z_min_cost_iter = std::min_element(z_bin_costs.begin(), z_bin_costs.end());
+
+        struct SplitCandidate {
+            float cost;
+            float boundary_split;
+            Axis axis;
+            std::function<bool(const Primitive&)> split_function;
+        };
+
+        std::vector<SplitCandidate> candidates;
+        
+        // Only consider if split is non-0.
+        if (x_min_cost_iter->left_bin_count != 0 && x_min_cost_iter->right_bin_count != 0) {
+            SplitCandidate x_candidate;
+            x_candidate.cost = x_min_cost_iter->cost;
+            int boundary_index = std::distance(x_bin_costs.begin(), x_min_cost_iter);
+            float bin_size = (bb.max.x - bb.min.x) / kBvhBinCount;
+            float boundary_split = bb.min.x + bin_size * (boundary_index + 1);
+            x_candidate.boundary_split = boundary_split;
+            x_candidate.axis = Axis::X;
+            candidates.push_back(x_candidate);
+        }
+
+        if (y_min_cost_iter->left_bin_count != 0 && y_min_cost_iter->right_bin_count != 0) {
+            SplitCandidate y_candidate;
+            y_candidate.cost = y_min_cost_iter->cost;
+            int boundary_index = std::distance(y_bin_costs.begin(), y_min_cost_iter);
+            float bin_size = (bb.max.y - bb.min.y) / kBvhBinCount;
+            float boundary_split = bb.min.y + bin_size * (boundary_index + 1);
+            y_candidate.boundary_split = boundary_split;
+            y_candidate.axis = Axis::Y;
+            candidates.push_back(y_candidate);
+        }
+
+        if (z_min_cost_iter->left_bin_count != 0 && z_min_cost_iter->right_bin_count != 0) {
+            SplitCandidate z_candidate;
+            z_candidate.cost = z_min_cost_iter->cost;
+            int boundary_index = std::distance(z_bin_costs.begin(), z_min_cost_iter);
+            float bin_size = (bb.max.z - bb.min.z) / kBvhBinCount;
+            float boundary_split = bb.min.z + bin_size * (boundary_index + 1);
+            z_candidate.boundary_split = boundary_split;
+            z_candidate.axis = Axis::Z;
+            candidates.push_back(z_candidate);
+        }
+        
+        if (candidates.empty())
+            return;
+
+        auto best_candidate = candidates[0];
+        for (auto candidate : candidates) {
+            if (candidate.cost < best_candidate.cost)
+                best_candidate = candidate;
+        }
+
+        std::function<float(const Primitive&)> axis_coord;
+        switch (best_candidate.axis) {
+            case Axis::X: {
+                axis_coord = [](const Primitive& obj) { return obj.bbox().center().x; };
+                break;
+            } 
+            case Axis::Y: {
+                axis_coord = [](const Primitive& obj) { return obj.bbox().center().y; };
+                break;
+            } 
+            case Axis::Z: {
+                axis_coord = [](const Primitive& obj) { return obj.bbox().center().z; };
+                break;
+            } 
+        }
+
+        // auto split_iter = std::partition(node_begin, node_end, split_function);
+        int left = node.start;
+        int right = node.start + node.size - 1;
+        size_t left_count = 0;
+        while (left <= right) {
+            if (axis_coord(primitives[left]) <= best_candidate.boundary_split) {
+                std::swap(primitives[left], primitives[right]);
+                split_rightBox.enclose(primitives[right].bbox());
+                --right;
+            } else {
+                split_leftBox.enclose(primitives[left].bbox());
+                ++left;
+                ++left_count;
+            }
+        }
+
+        // auto split_iter = std::partition(node_begin, node_end, [x_center](const Primitive& obj) {
+        //     return obj.bbox().center().x < x_center;
+        // });
+        // for (auto iter = node_begin; iter != split_iter; ++iter) {
+        //     split_leftBox.enclose(iter->bbox());
+        // }
+        // for (auto iter = split_iter; iter != node_end; ++iter) {
+        //     split_rightBox.enclose(iter->bbox());
+        // }
+
+        // Note that by construction in this simple example, the primitives are
+        // contiguous as required. But in the students real code, students are
+        // responsible for reorganizing the primitives in the primitives array so that
+        // after a SAH split is computed, the chidren refer to contiguous ranges of primitives.
+
+        size_t startl = node.start;  // starting prim index of left child
+        // size_t rangel = std::distance(node_begin, split_iter);  // number of prims in left child
+        size_t rangel = left_count;
+        size_t startr = node.start + rangel;  // starting prim index of right child
+        size_t ranger = node.size - rangel; // number of prims in right child
+
+        if (rangel == 0 || ranger == 0) {
+            std::cerr << std::max(rangel, ranger) << std::endl;
+            return;
+        }
+
+        // create child nodes
+        size_t node_addr_l = new_node();
+        size_t node_addr_r = new_node();
+        nodes[node_index].l = node_addr_l;
+        nodes[node_index].r = node_addr_r;
+
+        nodes[node_addr_l].bbox = split_leftBox;
+        nodes[node_addr_l].start = startl;
+        nodes[node_addr_l].size = rangel;
+
+        nodes[node_addr_r].bbox = split_rightBox;
+        nodes[node_addr_r].start = startr;
+        nodes[node_addr_r].size = ranger;
+
+        splitNode(node_addr_l, nodes, primitives);
+        splitNode(node_addr_r, nodes, primitives);
+    };
+    splitNode(root_idx, nodes, primitives);
 }
 
 template<typename Primitive>
 Trace BVH<Primitive>::hit(const Ray& ray) const {
-
     // TODO (PathTracer): Task 3
     // Implement ray - BVH intersection test. A ray intersects
     // with a BVH aggregate if and only if it intersects a primitive in
@@ -125,10 +319,57 @@ Trace BVH<Primitive>::hit(const Ray& ray) const {
     // Again, remember you can use hit() on any Primitive value.
 
     Trace ret;
-    for(const Primitive& prim : primitives) {
-        Trace hit = prim.hit(ray);
-        ret = Trace::min(ret, hit);
+    ret.distance = kMaxFloat;
+
+    std::function<void(const Node&, const Ray&, Trace&)> visit_node;
+    visit_node = [this, &visit_node] (const Node& node, const Ray& ray, Trace& ret) {
+        Vec2 times(0.0f, ret.distance);
+        if (!node.bbox.hit(ray, times)) {
+            return;
+        }
+
+        if (node.is_leaf()) {
+            for (size_t idx = node.start; idx < node.start + node.size; ++idx) {
+                Trace hit = primitives[idx].hit(ray);
+                if (hit.hit) {
+                    ret = Trace::min(ret, hit);
+                }
+            }
+            return;
+        } else {
+            // visit_node(nodes[node.l], ray, ret);
+            // visit_node(nodes[node.r], ray, ret);
+            Vec2 left_times(0.0f, times[1]);
+            Vec2 right_times(0.0f, times[1]);
+            bool hit_left = nodes[node.l].bbox.hit(ray, left_times);
+            bool hit_right = nodes[node.r].bbox.hit(ray, right_times);
+
+            if (!hit_left && !hit_right) {
+                return;
+            }
+
+            if (hit_left && !hit_right) {
+                return visit_node(nodes[node.l], ray, ret);
+            }
+
+            if (!hit_left && hit_right) {
+                return visit_node(nodes[node.r], ray, ret);
+            }
+
+            if (left_times[0] < right_times[0]) {
+                visit_node(nodes[node.l], ray, ret);
+                    visit_node(nodes[node.r], ray, ret);
+            } else {
+                visit_node(nodes[node.r], ray, ret);
+                    visit_node(nodes[node.l], ray, ret);
+            }
+        }
+    };
+
+    if (root_idx < nodes.size()) {
+        visit_node(nodes[root_idx], ray, ret);
     }
+
     return ret;
 }
 

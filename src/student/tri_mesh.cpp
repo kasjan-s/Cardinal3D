@@ -17,9 +17,10 @@ BBox Triangle::bbox() const {
     float x_min = std::min(std::min(v_0.position.x, v_1.position.x), v_2.position.x);
     float y_min = std::min(std::min(v_0.position.y, v_1.position.y), v_2.position.y);
     float z_min = std::min(std::min(v_0.position.z, v_1.position.z), v_2.position.z);
-    float x_max = std::max(std::min(v_0.position.x, v_1.position.x), v_2.position.x);
-    float y_max = std::max(std::min(v_0.position.y, v_1.position.y), v_2.position.y);
-    float z_max = std::max(std::min(v_0.position.z, v_1.position.z), v_2.position.z);
+
+    float x_max = std::max(std::max(v_0.position.x, v_1.position.x), v_2.position.x);
+    float y_max = std::max(std::max(v_0.position.y, v_1.position.y), v_2.position.y);
+    float z_max = std::max(std::max(v_0.position.z, v_1.position.z), v_2.position.z);
 
     return BBox(Vec3(x_min, y_min, z_min), Vec3(x_max, y_max, z_max));
 }

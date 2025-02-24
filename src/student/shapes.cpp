@@ -31,14 +31,13 @@ Trace Sphere::hit(const Ray& ray) const {
     // ret.distance = 0.0f;   // at what distance did the intersection occur?
     // ret.position = Vec3{}; // where was the intersection?
     // ret.normal = Vec3{};   // what was the surface normal at the intersection?
+    // return ret;
 
-    if (!bbox().hit(ray, ray.dist_bounds)){
-        return ret;
-    }
+    float aux = dot(ray.point, ray.dir);
 
     float a = ray.dir.norm_squared();
-    float b = 2 * dot(ray.point, ray.dir);
-    float c = ray.point.norm_squared() - radius;
+    float b = 2 * aux;
+    float c = ray.point.norm_squared() - radius * radius;
 
     float discriminant = b * b - 4 * a * c;
     if (discriminant < 0) {
@@ -63,7 +62,7 @@ Trace Sphere::hit(const Ray& ray) const {
             ret.distance = t1;
             ret.position = ray.at(t1);
             ret.normal = ret.position;
-        } else if (t2 >= ray.dist_bounds[0] && t1 <= ray.dist_bounds[1]) {
+        } else if (t2 >= ray.dist_bounds[0] && t2 <= ray.dist_bounds[1]) {
             ret.hit = true;
             ret.distance = t2;
             ret.position = ray.at(t2);

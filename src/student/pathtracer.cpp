@@ -31,8 +31,8 @@ Spectrum Pathtracer::trace_pixel(size_t x, size_t y) {
 
     Ray out = camera.generate_ray(xy / wh);
 
-    if (RNG::coin_flip(0.0003f))
-       log_ray(out, 10.0f);
+    // if (RNG::coin_flip(0.0003f))
+    //    log_ray(out, 10.0f);
 
     return trace_ray(out);
 }
@@ -47,6 +47,8 @@ Spectrum Pathtracer::trace_ray(const Ray& ray) {
         }
         return {};
     }
+
+    // log_ray(ray, hit.distance);
 
     // If we're using a two-sided material, treat back-faces the same as front-faces
     const BSDF& bsdf = materials[hit.material];
@@ -97,7 +99,9 @@ Spectrum Pathtracer::trace_ray(const Ray& ray) {
                 // This is another opportunity to do Russian roulette on low-throughput rays,
                 // which would allow us to skip the shadow ray cast, increasing efficiency.
                 Spectrum attenuation = bsdf.evaluate(out_dir, in_dir);
-                if(attenuation.luma() == 0.0f) continue;
+                if(attenuation.luma() == 0.0f) {
+                    continue;
+                } 
 
                 // TODO (PathTracer): Task 4
                 // Construct a shadow ray and compute whether the intersected surface is
@@ -107,7 +111,7 @@ Spectrum Pathtracer::trace_ray(const Ray& ray) {
                 Trace shadow_hit = scene.hit(shadow_ray);
                 if (shadow_hit.hit) {
                     continue;
-                }
+                }                
 
                 // Tip: since you're creating the shadow ray at the intersection point, it may
                 // intersect the surface at time=0. Similarly, if the ray is allowed to have
@@ -143,14 +147,9 @@ Spectrum Pathtracer::trace_ray(const Ray& ray) {
         return radiance_out;
     }
     
-
     // (2) Randomly select a new ray direction (it may be reflection or transmittance
     // ray depending on surface type) using bsdf.sample()
-    BSDF_Sample random = bsdf.sample(-ray.dir);
-
-    if (ray.depth == 0) {
-        radiance_out += random.emissive;
-    }
+    BSDF_Sample bsdf_sample = bsdf.sample(out_dir);
 
     // (3) Compute the throughput of the recursive ray. This should be the current ray's
     // throughput scaled by the BSDF attenuation, cos(theta), and BSDF sample PDF.
@@ -161,14 +160,14 @@ Spectrum Pathtracer::trace_ray(const Ray& ray) {
         return radiance_out;
 
     Spectrum throughput = ray.throughput;
-    throughput *= random.attenuation * dot(hit.normal, random.direction) / random.pdf;
+    throughput *= bsdf_sample.attenuation * bsdf_sample.direction.y / bsdf_sample.pdf;
     throughput *= 1.0f / (1.0f - kRussianRoulette);
-
 
     // (4) Create new scene-space ray and cast it to get incoming light. As with shadow rays, you
     // should modify time_bounds so that the ray does not intersect at time = 0. Remember to
     // set the new throughput and depth values.
-    Ray new_ray(hit.position + EPS_F * random.direction, random.direction);
+    Vec3 in_dir_dir = object_to_world.rotate(bsdf_sample.direction);
+    Ray new_ray(hit.position + EPS_F * in_dir_dir, in_dir_dir);
     new_ray.dist_bounds = Vec2(0.0f, kMaxFloat);
     new_ray.throughput = throughput;
     new_ray.depth = ray.depth + 1;
@@ -177,6 +176,12 @@ Spectrum Pathtracer::trace_ray(const Ray& ray) {
     // the BSDF sample emissive term.
     Spectrum incoming = trace_ray(new_ray);
     radiance_out += incoming;
+
+    // Spectrum emissive = bsdf_sample.emissive * ray.throughput;
+    if (ray.depth == 0) {
+        radiance_out += bsdf_sample.emissive;
+    } 
+    
     return radiance_out;
 }
 

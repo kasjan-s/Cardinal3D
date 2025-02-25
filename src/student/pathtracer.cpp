@@ -155,13 +155,13 @@ Spectrum Pathtracer::trace_ray(const Ray& ray) {
     // throughput scaled by the BSDF attenuation, cos(theta), and BSDF sample PDF.
     // Potentially terminate the path using Russian roulette as a function of the new throughput.
     // Note that allowing the termination probability to approach 1 may cause extra speckling.
-    float kRussianRoulette = 0.25f;
-    if (RNG::unit() < kRussianRoulette) 
+    float russianRoulette = 1.0f - ray.throughput.luma();
+    if (RNG::unit() < russianRoulette) 
         return radiance_out;
 
     Spectrum throughput = ray.throughput;
     throughput *= bsdf_sample.attenuation * bsdf_sample.direction.y / bsdf_sample.pdf;
-    throughput *= 1.0f / (1.0f - kRussianRoulette);
+    throughput *= 1.0f / (1.0f - russianRoulette);
 
     // (4) Create new scene-space ray and cast it to get incoming light. As with shadow rays, you
     // should modify time_bounds so that the ray does not intersect at time = 0. Remember to

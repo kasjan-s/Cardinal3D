@@ -40,15 +40,10 @@ BSDF_Sample BSDF_Lambertian::sample(Vec3 out_dir) const {
     // Implement lambertian BSDF. Use of BSDF_Lambertian::sampler may be useful
 
     BSDF_Sample ret;
-    ret.attenuation = albedo;
-    float pdf;
-
-    // Random direction around (0,1,0) hemisphere.
-    Vec3 random_direction = sampler.sample(pdf);
-    // Gotta cast it in out_dir direction. Given that base direction is (0,1,0), it simplifies calculations.
-    ret.direction = Mat4::rotate_to(out_dir) * random_direction;
-
-    ret.pdf = pdf;               // Was was the PDF of the sampled direction?
+    
+    ret.direction = sampler.sample(ret.pdf);
+    ret.attenuation = evaluate(out_dir, ret.direction);
+    
     return ret;
 }
 

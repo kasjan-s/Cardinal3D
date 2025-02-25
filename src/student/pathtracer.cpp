@@ -150,39 +150,38 @@ Spectrum Pathtracer::trace_ray(const Ray& ray) {
     // (2) Randomly select a new ray direction (it may be reflection or transmittance
     // ray depending on surface type) using bsdf.sample()
     BSDF_Sample bsdf_sample = bsdf.sample(out_dir);
+    radiance_out += bsdf_sample.emissive;
 
     // (3) Compute the throughput of the recursive ray. This should be the current ray's
     // throughput scaled by the BSDF attenuation, cos(theta), and BSDF sample PDF.
     // Potentially terminate the path using Russian roulette as a function of the new throughput.
     // Note that allowing the termination probability to approach 1 may cause extra speckling.
-    float russianRoulette = 1.0f - ray.throughput.luma();
-    if (RNG::unit() < russianRoulette) 
-        return radiance_out;
-
     Spectrum throughput = ray.throughput;
-    throughput *= bsdf_sample.attenuation * bsdf_sample.direction.y / bsdf_sample.pdf;
-    throughput *= 1.0f / (1.0f - russianRoulette);
+    float cos_theta = bsdf_sample.direction.y;
+    throughput *= bsdf_sample.attenuation * cos_theta / bsdf_sample.pdf;
+
+    // float termination_probability = std::max(1.0f - bsdf.evaluate(out_dir, bsdf_sample.direction).luma(), 0.25f);
+    // if (RNG::unit() < termination_probability) {
+    //     return radiance_out;
+    // } else {
+    //     throughput = throughput / (1.0f - termination_probability);
+    // }
 
     // (4) Create new scene-space ray and cast it to get incoming light. As with shadow rays, you
     // should modify time_bounds so that the ray does not intersect at time = 0. Remember to
     // set the new throughput and depth values.
     Vec3 in_dir_dir = object_to_world.rotate(bsdf_sample.direction);
-    Ray new_ray(hit.position + EPS_F * in_dir_dir, in_dir_dir);
-    new_ray.dist_bounds = Vec2(0.0f, kMaxFloat);
+    Ray new_ray(hit.position, in_dir_dir);
+    new_ray.dist_bounds = Vec2(EPS_F, kMaxFloat);
     new_ray.throughput = throughput;
     new_ray.depth = ray.depth + 1;
 
     // (5) Add contribution due to incoming light with proper weighting. Remember to add in
     // the BSDF sample emissive term.
     Spectrum incoming = trace_ray(new_ray);
-    radiance_out += incoming;
-
-    // Spectrum emissive = bsdf_sample.emissive * ray.throughput;
-    if (ray.depth == 0) {
-        radiance_out += bsdf_sample.emissive;
-    } 
+    incoming = incoming * throughput;
     
-    return radiance_out;
+    return radiance_out + incoming;
 }
 
 } // namespace PT
